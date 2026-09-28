@@ -6,21 +6,21 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     <group
-        android:translateY="4.5">
+        android:translateY="3">
         <path
             android:fillColor="#FF000000"
             android:fillAlpha="0.12"
             android:pathData="M50,24 H58 A10,10 0 0 1 68,34 V74 A10,10 0 0 1 58,84 H50 A10,10 0 0 1 40,74 V34 A10,10 0 0 1 50,24 Z" />
     </group>
     <group
-        android:translateY="2.8">
+        android:translateY="2">
         <path
             android:fillColor="#FF000000"
             android:fillAlpha="0.18"
             android:pathData="M50,24 H58 A10,10 0 0 1 68,34 V74 A10,10 0 0 1 58,84 H50 A10,10 0 0 1 40,74 V34 A10,10 0 0 1 50,24 Z" />
     </group>
     <group
-        android:translateY="1.4">
+        android:translateY="1">
         <path
             android:fillColor="#FF000000"
             android:fillAlpha="0.25"
@@ -166,7 +166,7 @@
     </path>
     <path
         android:name="volume"
-        android:pathData="M60.2,64.05 H60.2 A3.35,3.35 0 0 1 63.55,67.4 V76.9 A3.35,3.35 0 0 1 60.2,80.25 H60.2 A3.35,3.35 0 0 1 56.85,76.9 V67.4 A3.35,3.35 0 0 1 60.2,64.05 Z">
+        android:pathData="M60.2,64.05 A3.35,3.35 0 0 1 63.55,67.4 V76.9 A3.35,3.35 0 0 1 60.2,80.25 A3.35,3.35 0 0 1 56.85,76.9 V67.4 A3.35,3.35 0 0 1 60.2,64.05 Z">
         <aapt:attr name="android:fillColor">
             <gradient
                 android:type="radial"
