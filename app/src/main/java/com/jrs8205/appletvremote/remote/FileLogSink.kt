@@ -6,6 +6,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Appends connection log lines to a file so the reason for a failure survives the process. The
@@ -20,6 +21,8 @@ class FileLogSink(private val directory: File, private val maxBytes: Long = DEFA
 
     private val executor = Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "connection-log").apply { isDaemon = true } }
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+    private val snapshotDirectory: File get() = File(directory, "share")
+    private val snapshots = AtomicInteger(0)
 
     /** Queues [line] for the file, prefixed with today's date; the line itself carries the time. */
     fun append(line: String) {
@@ -33,6 +36,23 @@ class FileLogSink(private val directory: File, private val maxBytes: Long = DEFA
 
     /** The files that exist, newest first. */
     fun files(): List<File> = listOf(file, previous).filter { it.isFile }
+
+    /**
+     * Copies the files as they are right now into [snapshotDirectory] and returns the copies, newest
+     * first. The copy is made on the writer thread, so no line lands and no rotation happens halfway
+     * through, and a copy stays as it is while the live files move on. The previous snapshot is removed.
+     */
+    fun snapshot(): List<File> = executor.submit<List<File>> {
+        runCatching {
+            snapshotDirectory.mkdirs()
+            snapshotDirectory.listFiles()?.forEach { it.delete() }
+            val stamp = "${SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())}-${snapshots.incrementAndGet()}"
+            listOf(file to "connection-$stamp.log", previous to "connection-$stamp.1.log").mapNotNull { (source, name) ->
+                if (!source.isFile) return@mapNotNull null
+                File(snapshotDirectory, name).also { source.copyTo(it, overwrite = true) }
+            }
+        }.getOrDefault(emptyList())
+    }.get()
 
     private fun write(line: String) {
         runCatching {

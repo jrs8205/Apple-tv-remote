@@ -94,12 +94,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Offers the log files (current and previous) to any app that takes text files. */
+    /** Offers a copy of the log files (current and previous) to any app that takes text files. */
     private fun shareLog() {
         lifecycleScope.launch(Dispatchers.IO) {
-            val sink = appContainer.logSink
-            sink.flush()
-            val uris = sink.files().map { FileProvider.getUriForFile(this@MainActivity, "$packageName.logs", it) }
+            // A copy, not the live files: the share sheet itself logs lines, and one of them could rotate the file being read.
+            val uris = appContainer.logSink.snapshot().map { FileProvider.getUriForFile(this@MainActivity, "$packageName.logs", it) }
             if (uris.isEmpty()) return@launch
             val send = if (uris.size == 1) {
                 Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, uris.single())

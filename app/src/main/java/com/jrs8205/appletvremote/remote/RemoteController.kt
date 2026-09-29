@@ -99,8 +99,8 @@ class RemoteController(
 
     private val commands = Channel<suspend CompanionClient.() -> Unit>(Channel.UNLIMITED)
     private val touchRecovery = AtomicBoolean(false)
-    /** A power tap is queued behind a connect attempt; a failure of that attempt must not spend 6 s on mDNS first. */
-    private val powerDecisionPending = AtomicBoolean(false)
+    /** The power decision queued behind a connect attempt, if any; a failure of that attempt must not spend 6 s on mDNS first. */
+    @Volatile private var pendingPowerDecision: (suspend CompanionClient.() -> Unit)? = null
     private val touchPump = TouchPump(scope) { sample ->
         val active = currentClient() ?: return@TouchPump
         try {
@@ -129,6 +129,8 @@ class RemoteController(
         }
         scope.launch {
             for (command in commands) {
+                // Cleared as soon as the decision leaves the queue, whether it runs or is skipped for lack of a client.
+                if (command === pendingPowerDecision) pendingPowerDecision = null
                 val active = currentClient() ?: continue
                 try {
                     active.command()
@@ -138,7 +140,7 @@ class RemoteController(
                 } catch (e: Exception) {
                     log.log { "command failed: $e" }
                     _state.update { it.copy(lastError = e) }
-                    if (e is CompanionException.ConnectionClosed && (_state.value.wakingTv || powerDecisionPending.get())) {
+                    if (e is CompanionException.ConnectionClosed && (_state.value.wakingTv || pendingPowerDecision != null)) {
                         // The wake-up waiting behind this command re-resolves the address itself; recovering here would only delay it.
                         log.log { "skipping address recovery: ${if (_state.value.wakingTv) "wake-up" else "power tap"} queued" }
                     } else if (e is CompanionException.ConnectionClosed) {
@@ -369,19 +371,20 @@ class RemoteController(
             ConnectionState.Connecting -> {
                 // The queue runs this after the connect attempt in flight, so the TV has by then answered or not.
                 log.log { "power tap while connecting: deciding when the connect attempt ends" }
-                powerDecisionPending.set(true)
-                enqueue {
-                    powerDecisionPending.set(false)
-                    val after = _state.value
+                // The client's own state is current here; the copy in [_state] is made by another coroutine and may lag.
+                val decision: suspend CompanionClient.() -> Unit = {
+                    val connection = state.value
                     when {
-                        after.wakingTv -> log.log { "power tap dropped: wake-up already in progress" }
-                        after.connection == ConnectionState.Ready -> togglePowerOrWake()
+                        _state.value.wakingTv -> log.log { "power tap dropped: wake-up already in progress" }
+                        connection == ConnectionState.Ready -> togglePowerOrWake()
                         else -> {
-                            log.log { "connect attempt ended in ${after.connection}: waking the chain" }
+                            log.log { "connect attempt ended in $connection: waking the chain" }
                             wakeAndConnect()
                         }
                     }
                 }
+                pendingPowerDecision = decision
+                enqueue(decision)
             }
             else -> {
                 log.log { "power tap while ${current.connection}: waking the chain" }
