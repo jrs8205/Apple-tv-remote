@@ -28,7 +28,9 @@ import com.jrs8205.appletvremote.discovery.AndroidSocketConnector
 import com.jrs8205.appletvremote.discovery.NetworkTargets
 import com.jrs8205.appletvremote.discovery.NsdDiscovery
 import com.jrs8205.appletvremote.remote.ConnectionLog
+import com.jrs8205.appletvremote.remote.FileLogSink
 import com.jrs8205.appletvremote.remote.RemoteController
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -41,8 +43,9 @@ class AppContainer(context: Context) {
     val deviceRepository = DeviceRepository(context.appDataStore, KeystoreSecretCipher())
     val identityRepository = IdentityRepository(context.appDataStore)
     val lgTvRepository = LgTvRepository(context.appDataStore)
-    val discovery = NsdDiscovery(context)
-    val connectionLog = ConnectionLog()
+    val logSink = FileLogSink(File(context.filesDir, "logs"))
+    val connectionLog = ConnectionLog(sink = logSink::append)
+    val discovery = NsdDiscovery(context, connectionLog)
     val remoteController = RemoteController(
         scope = appScope,
         deviceRepository = deviceRepository,
@@ -70,6 +73,9 @@ class RemoteApp : Application() {
         // A process killed while the media notification was detached (paused TV) leaves it behind; it is stale by now.
         getSystemService(NotificationManager::class.java)?.cancel(DefaultMediaNotificationProvider.DEFAULT_NOTIFICATION_ID)
         container = AppContainer(this)
+        container.connectionLog.log {
+            "app start: ${BuildConfig.VERSION_NAME} (${BuildConfig.BUILD_TYPE}, code ${BuildConfig.VERSION_CODE}) on ${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE}"
+        }
         container.appScope.launch {
             combine(container.remoteController.state, container.settingsRepository.settings, foreground) { state, settings, visible ->
                 visible && settings.mediaNotificationEnabled && state.connection == ConnectionState.Ready && state.media.playState != PlayState.INACTIVE
@@ -78,6 +84,7 @@ class RemoteApp : Application() {
                 // TV is playing, and a paused TV would never satisfy startForegroundService's deadline.
                 if (wanted) {
                     runCatching { startService(Intent(this@RemoteApp, RemoteMediaService::class.java)) }
+                        .onSuccess { container.connectionLog.log { "media service started" } }
                         .onFailure { container.connectionLog.log { "media service start failed: $it" } }
                 }
             }

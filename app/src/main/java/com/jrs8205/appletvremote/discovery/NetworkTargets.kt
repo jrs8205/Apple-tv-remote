@@ -20,6 +20,8 @@ class NetworkTargets(private val connectivity: ConnectivityManager) {
     /** TCP sockets that stay on the LAN for the same reason; null when the phone has no Wi-Fi or Ethernet link. */
     fun lanSocketFactory(): SocketFactory? = lanNetwork()?.socketFactory
 
+    fun lanAvailable(): Boolean = lanNetwork() != null
+
     private fun lanNetwork(): Network? = connectivity.allNetworks.firstOrNull { network ->
         connectivity.getNetworkCapabilities(network)?.let {
             it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || it.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)

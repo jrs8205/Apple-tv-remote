@@ -180,6 +180,7 @@ class LgTvClient(
             val incoming = LgTvMessages.parse(text) ?: return
             val id = incoming.id ?: return
             if (incoming.type == "response" && incoming.payload?.optString("pairingType") == "PROMPT") {
+                log.log { "LG TV asks for permission on its screen" }
                 pairingPrompted?.invoke()
                 return
             }

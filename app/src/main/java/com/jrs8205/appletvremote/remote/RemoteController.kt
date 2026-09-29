@@ -171,8 +171,15 @@ class RemoteController(
 
     /** Looks the TV up by name for a few seconds; stores and returns true when its address or port changed. */
     private suspend fun refreshAddress(device: PairedDevice): Boolean {
-        val found = discover(ADDRESS_REFRESH_MS) { list -> list.firstOrNull { it.serviceName == device.name } } ?: return false
-        if (found.host == device.host && found.port == device.port) return false
+        val found = discover(ADDRESS_REFRESH_MS) { list -> list.firstOrNull { it.serviceName == device.name } }
+        if (found == null) {
+            log.log { "${device.name} not found by mDNS within ${ADDRESS_REFRESH_MS / 1000} s" }
+            return false
+        }
+        if (found.host == device.host && found.port == device.port) {
+            log.log { "address unchanged: ${found.host}:${found.port}" }
+            return false
+        }
         log.log { "address changed to ${found.host}:${found.port}" }
         deviceRepository.updateAddress(found.host, found.port)
         withTimeoutOrNull(2000) { _state.first { it.device?.host == found.host && it.device?.port == found.port } }
@@ -198,8 +205,13 @@ class RemoteController(
         val lg = lgTvRepository.settings
         _state.update { it.copy(wakingTv = true) }
         enqueue {
+            val started = System.currentTimeMillis()
             try {
                 val settings = lg.first()
+                log.log {
+                    val lgPart = if (settings.enabled && settings.host.isNotBlank()) "LG ${settings.host}, input ${settings.inputId}, MAC ${settings.macAddress ?: "unknown"}" else "no LG TV"
+                    "wake-up started: $lgPart, Apple TV ${_state.value.device?.let { "${it.host}:${it.port}" } ?: "not paired"}"
+                }
                 if (settings.enabled && settings.host.isNotBlank()) wakeThroughLgTv(settings)
                 var attempt = 0
                 // The address and port may change while the TV boots, so every attempt asks for the client afresh.
@@ -208,6 +220,7 @@ class RemoteController(
                         requireClient().ensureConnected()
                         break
                     } catch (e: CompanionException) {
+                        log.log { "Apple TV attempt ${attempt + 1}/$WAKE_CONNECT_ATTEMPTS failed: $e" }
                         if (++attempt >= WAKE_CONNECT_ATTEMPTS) throw e
                         delay(WAKE_RETRY_DELAY_MS)
                         refreshAddress(_state.value.device ?: throw e)
@@ -215,6 +228,10 @@ class RemoteController(
                 }
                 requireClient().pressButton(HidButton.WAKE)
                 _state.update { it.copy(systemStatus = SystemStatus.AWAKE) }
+                log.log { "wake-up done in ${(System.currentTimeMillis() - started) / 1000} s" }
+            } catch (e: Exception) {
+                if (e !is CancellationException) log.log { "wake-up failed after ${(System.currentTimeMillis() - started) / 1000} s: $e" }
+                throw e
             } finally {
                 _state.update { it.copy(wakingTv = false) }
             }
@@ -231,12 +248,22 @@ class RemoteController(
         val targets = if (macs.isEmpty()) emptyList() else withContext(Dispatchers.IO) {
             networkTargets.broadcastAddresses() + listOfNotNull(runCatching { InetAddress.getByName(settings.host) }.getOrNull())
         }
+        var lastFailure: String? = null
         val outcome = WakeRetry(LG_WAKE_TIMEOUT_MS, LG_RETRY_DELAY_MS).run(
             sendWake = { attempt -> if (macs.isNotEmpty()) sendWakeOnLan(macs, targets, describe = attempt == 1) },
             connect = {
-                lgTvClient(settings).use { client ->
-                    client.register(settings)
-                    client.switchInput(settings.inputId)
+                try {
+                    lgTvClient(settings).use { client ->
+                        client.register(settings)
+                        client.switchInput(settings.inputId)
+                    }
+                } catch (e: Exception) {
+                    // The same failure repeats every second while the TV boots; only a change in it is news.
+                    if (e !is CancellationException && e.toString() != lastFailure) {
+                        lastFailure = e.toString()
+                        log.log { "LG TV attempt failed: $e" }
+                    }
+                    throw e
                 }
             },
         )
@@ -261,7 +288,12 @@ class RemoteController(
             }
             delay(250)
         }
-        if (describe) log.log { "sent wake-on-lan to the LG TV: ${macs.size} addresses, $delivered packets via ${targets.joinToString { it.hostAddress }}" }
+        if (describe) {
+            log.log {
+                val lan = if (networkTargets.lanAvailable()) "bound to Wi-Fi" else "no Wi-Fi or Ethernet network to bind to"
+                "sent wake-on-lan to the LG TV: ${macs.size} addresses, $delivered packets via ${targets.joinToString { it.hostAddress }}, $lan"
+            }
+        }
         failures.forEach { failure -> log.log { "wake-on-lan send failed: $failure" } }
     }
 
@@ -303,21 +335,33 @@ class RemoteController(
         if (settings.certificate == null) certificate?.let { lgTvRepository.setCertificate(it) }
     }
 
-    fun press(button: HidButton, holdMs: Long = 0) = enqueue { pressButton(button, holdMs) }
+    fun press(button: HidButton, holdMs: Long = 0) = enqueue {
+        log.log { if (holdMs > 0) "hold $button for $holdMs ms" else "press $button" }
+        pressButton(button, holdMs)
+    }
 
-    fun media(command: MediaCommand) = enqueue { media(command) }
+    fun media(command: MediaCommand) = enqueue {
+        log.log { "media $command" }
+        media(command)
+    }
 
-    fun skip(seconds: Double) = enqueue { skip(seconds) }
+    fun skip(seconds: Double) = enqueue {
+        log.log { "skip $seconds s" }
+        skip(seconds)
+    }
 
     fun togglePower() {
-        if (_state.value.wakingTv) {
+        val current = _state.value
+        if (current.wakingTv) {
             log.log { "power tap ignored: wake-up already in progress" }
             return
         }
-        if (_state.value.connection != ConnectionState.Ready) {
+        if (current.connection != ConnectionState.Ready) {
+            log.log { "power tap while ${current.connection}: waking the chain" }
             wakeAndConnect()
             return
         }
+        log.log { "power tap while connected, TV status ${current.systemStatus}" }
         enqueue {
             try {
                 togglePowerConnected()
@@ -333,6 +377,7 @@ class RemoteController(
         // A TV that answers our session is awake unless it told us otherwise, so an unknown state means sleep.
         val status = fetchAttentionState() ?: _state.value.systemStatus
         val button = if (status == SystemStatus.ASLEEP) HidButton.WAKE else HidButton.SLEEP
+        log.log { "TV status $status, pressing $button" }
         pressButton(button)
         _state.update { it.copy(systemStatus = if (button == HidButton.WAKE) SystemStatus.AWAKE else SystemStatus.ASLEEP) }
     }
@@ -340,7 +385,11 @@ class RemoteController(
     fun touch(phase: TouchPhase, x: Int, y: Int) = touchPump.submit(TouchSample(phase, x, y))
 
     /** Replaces the text in the focused field on the TV. */
-    fun sendText(text: String) = enqueue { sendText(text, replace = true) }
+    fun sendText(text: String) = enqueue {
+        // Only the length: the text may be a password typed into the TV.
+        log.log { "send text, ${text.length} characters" }
+        sendText(text, replace = true)
+    }
 
     /** Asks the TV whether a text field is focused and updates [RemoteState.keyboard]. */
     fun refreshKeyboard() = enqueue {
@@ -353,14 +402,18 @@ class RemoteController(
     fun onAppForeground() {
         backgroundDisconnect?.cancel()
         backgroundDisconnect = null
-        if (_state.value.device != null) connect()
+        val device = _state.value.device
+        log.log { "app in foreground, ${if (device == null) "no paired TV" else "connection ${_state.value.connection}"}" }
+        if (device != null) connect()
     }
 
     fun onAppBackground(keepAlive: Boolean) {
+        log.log { if (keepAlive) "app in background, keeping the connection for the media notification" else "app in background, disconnecting in ${BACKGROUND_DISCONNECT_MS / 1000} s" }
         if (keepAlive) return
         backgroundDisconnect?.cancel()
         backgroundDisconnect = scope.launch {
             delay(BACKGROUND_DISCONNECT_MS)
+            log.log { "background disconnect" }
             clientMutex.withLock { client?.disconnect() }
         }
     }
@@ -379,6 +432,7 @@ class RemoteController(
             displayName = clientName,
         )
         val connection = CompanionConnection(connector, device.host, device.port, log)
+        log.log { "pairing started with ${device.serviceName} at ${device.host}:${device.port} (${device.model})" }
         try {
             connection.open()
             val session = PairingSession(connection, identity, SecureRandomSource)
@@ -402,6 +456,7 @@ class RemoteController(
             withContext(NonCancellable) { release(attempt) }
         }
         val device = PairedDevice(attempt.device.serviceName, attempt.device.host, attempt.device.port, credentials)
+        log.log { "paired with ${device.name}" }
         dropClient()
         deviceRepository.save(device)
         _state.update { it.copy(device = device) }
@@ -442,13 +497,20 @@ class RemoteController(
         )
         client = created
         clientDevice = device
+        log.log { "client for ${device.name} at ${device.host}:${device.port}" }
         eventJob = scope.launch {
             launch {
-                created.state.collect { connection -> _state.update { it.copy(connection = connection) } }
+                created.state.collect { connection ->
+                    if (connection != _state.value.connection) log.log { "connection: $connection" }
+                    _state.update { it.copy(connection = connection) }
+                }
             }
             created.events.collect { event ->
                 when (event) {
-                    is CompanionEvent.SystemStatusChanged -> _state.update { it.copy(systemStatus = event.status) }
+                    is CompanionEvent.SystemStatusChanged -> {
+                        if (event.status != _state.value.systemStatus) log.log { "TV status: ${event.status}" }
+                        _state.update { it.copy(systemStatus = event.status) }
+                    }
                     is CompanionEvent.MediaCapabilitiesChanged -> {
                         val media = event.capabilities
                         if (media != _state.value.media) log.log { "media flags 0x${media.flags.toString(16)}: ${media.playState}" }
@@ -470,6 +532,7 @@ class RemoteController(
             clientDevice = null
             eventJob?.cancel()
             eventJob = null
+            log.log { "dropping the connection" }
             stale.disconnect()
             _state.update { it.copy(connection = ConnectionState.Disconnected, systemStatus = SystemStatus.UNKNOWN, media = MediaCapabilities(0), keyboard = null) }
         }

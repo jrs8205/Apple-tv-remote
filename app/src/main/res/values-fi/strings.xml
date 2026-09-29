@@ -64,6 +64,7 @@
     <string name="settings_unpair_title">Poistetaanko paritus laitteesta %1$s?</string>
     <string name="settings_unpair_message">Sinun täytyy paritata uudelleen PIN-koodilla, jotta voit ohjata sitä.</string>
     <string name="settings_logs">Yhteysloki</string>
+    <string name="share_log">Jaa loki</string>
     <string name="settings_version">Versio %1$s (%2$d)</string>
 
     <string name="cd_click_pad">Klikkipinta</string>

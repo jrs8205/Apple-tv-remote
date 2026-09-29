@@ -6,6 +6,7 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.util.Log
+import com.jrs8205.appletvremote.protocol.log.ProtocolLog
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -21,7 +22,7 @@ data class DiscoveredDevice(
 )
 
 /** Browses `_companion-link._tcp` and keeps a list of Apple TVs with a usable IPv4 address. */
-class NsdDiscovery(context: Context) {
+class NsdDiscovery(context: Context, private val log: ProtocolLog? = null) {
 
     private val nsdManager = context.getSystemService(NsdManager::class.java)
     private val wifiManager = context.applicationContext.getSystemService(WifiManager::class.java)
@@ -43,6 +44,7 @@ class NsdDiscovery(context: Context) {
         val discoveryListener = object : NsdManager.DiscoveryListener {
             override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
                 Log.w(TAG, "discovery failed to start: $errorCode")
+                log?.log { "mDNS browse failed to start: error $errorCode" }
                 close(IllegalStateException("discovery failed: $errorCode"))
             }
 
@@ -53,22 +55,28 @@ class NsdDiscovery(context: Context) {
             override fun onServiceFound(serviceInfo: NsdServiceInfo) {
                 val name = serviceInfo.serviceName
                 if (callbacks.containsKey(name)) return
+                log?.log { "mDNS found $name, resolving" }
                 val callback = object : NsdManager.ServiceInfoCallback {
                     override fun onServiceUpdated(info: NsdServiceInfo) {
                         val device = info.toDevice()
-                        synchronized(found) {
+                        val changed = synchronized(found) {
+                            val before = found[name]
                             if (device == null) found.remove(name) else found[name] = device
+                            before != device
                         }
+                        if (changed) log?.log { if (device == null) "mDNS $name has no usable IPv4 address yet" else "mDNS resolved $name: ${device.host}:${device.port} (${device.model})" }
                         publish()
                     }
 
                     override fun onServiceLost() {
                         synchronized(found) { found.remove(name) }
+                        log?.log { "mDNS lost $name" }
                         publish()
                     }
 
                     override fun onServiceInfoCallbackRegistrationFailed(errorCode: Int) {
                         Log.w(TAG, "resolve registration failed for $name: $errorCode")
+                        log?.log { "mDNS resolve of $name failed to start: error $errorCode" }
                     }
 
                     override fun onServiceInfoCallbackUnregistered() = Unit
@@ -85,10 +93,12 @@ class NsdDiscovery(context: Context) {
             }
         }
 
+        log?.log { "mDNS browse started${if (lock == null) " without a multicast lock" else ""}" }
         nsdManager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener)
         publish()
 
         awaitClose {
+            log?.log { "mDNS browse stopped" }
             runCatching { nsdManager.stopServiceDiscovery(discoveryListener) }
             callbacks.values.forEach { runCatching { nsdManager.unregisterServiceInfoCallback(it) } }
             lock?.let { if (it.isHeld) it.release() }

@@ -1,5 +1,6 @@
 package com.jrs8205.appletvremote
 
+import android.content.Intent
 import android.os.Bundle
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
@@ -14,6 +15,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -32,7 +34,9 @@ import com.jrs8205.appletvremote.ui.settings.LogScreen
 import com.jrs8205.appletvremote.ui.settings.SettingsScreen
 import com.jrs8205.appletvremote.ui.settings.SettingsViewModel
 import com.jrs8205.appletvremote.ui.theme.AppTheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
@@ -82,11 +86,29 @@ class MainActivity : ComponentActivity() {
                             onPairAnother = rootViewModel::openPairing,
                             onOpenHidProbe = rootViewModel::openHidProbe,
                         )
-                        Screen.LOGS -> LogScreen(log = appContainer.connectionLog, onBack = { rootViewModel.back() })
+                        Screen.LOGS -> LogScreen(log = appContainer.connectionLog, onBack = { rootViewModel.back() }, onShare = ::shareLog)
                         Screen.HID_PROBE -> HidProbeScreen(onPress = remoteViewModel::press, onBack = { rootViewModel.back() })
                     }
                 }
             }
+        }
+    }
+
+    /** Offers the log files (current and previous) to any app that takes text files. */
+    private fun shareLog() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val sink = appContainer.logSink
+            sink.flush()
+            val uris = sink.files().map { FileProvider.getUriForFile(this@MainActivity, "$packageName.logs", it) }
+            if (uris.isEmpty()) return@launch
+            val send = if (uris.size == 1) {
+                Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, uris.single())
+            } else {
+                Intent(Intent.ACTION_SEND_MULTIPLE).putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+            }
+            send.type = "text/plain"
+            send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            withContext(Dispatchers.Main) { startActivity(Intent.createChooser(send, getString(R.string.share_log))) }
         }
     }
 

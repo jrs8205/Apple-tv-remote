@@ -168,6 +168,7 @@ class CompanionClient(
 
     private suspend fun connect() {
         _state.value = ConnectionState.Connecting
+        log.log { "connecting to $host:$port" }
         val connection = CompanionConnection(connector, host, port, log, requestTimeoutMs, ioDispatcher = ioDispatcher, random = random)
         var established: Session? = null
         try {
@@ -197,6 +198,7 @@ class CompanionClient(
             (textInput["_tiD"] as? ByteArray)?.let { _events.tryEmit(CompanionEvent.TextInputStarted(textInput, KeyedArchive.parseState(it))) }
             for (name in SUBSCRIBED_EVENTS) connection.event("_interest", mapOf("_regEvents" to listOf(name)))
             val status = fetchAttentionState(connection)
+            log.log { "session ready with $host:$port, TV status ${status ?: "unknown"}" }
             _state.value = ConnectionState.Ready
             if (status != null) _events.tryEmit(CompanionEvent.SystemStatusChanged(status))
             scope.launch { watchClose(current) }
