@@ -16,26 +16,29 @@ internal class WakeRetry(
     private val now: () -> Long = System::currentTimeMillis,
 ) {
 
+    /** How many attempts were made and, when the TV never answered, the error of the last one. */
+    class Outcome(val attempts: Int, val error: Exception?)
+
     /**
-     * Calls [sendWake] and then [connect] until [connect] returns normally or [timeoutMs] has passed.
-     * Success carries the number of attempts it took; failure carries the last error from [connect].
+     * Calls [sendWake] (with the attempt number, starting at 1) and then [connect] until [connect]
+     * returns normally or [timeoutMs] has passed.
      */
-    suspend fun run(sendWake: suspend () -> Unit, connect: suspend () -> Unit): Result<Int> {
+    suspend fun run(sendWake: suspend (attempt: Int) -> Unit, connect: suspend () -> Unit): Outcome {
         val deadline = now() + timeoutMs
         var attempts = 0
         var lastError: Exception? = null
         while (now() < deadline) {
             attempts++
-            sendWake()
+            sendWake(attempts)
             try {
                 connect()
-                return Result.success(attempts)
+                return Outcome(attempts, null)
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 lastError = e
                 delay(retryDelayMs)
             }
         }
-        return Result.failure(lastError ?: IllegalStateException("no attempt fitted in ${timeoutMs}ms"))
+        return Outcome(attempts, lastError ?: IllegalStateException("no attempt fitted in ${timeoutMs}ms"))
     }
 }

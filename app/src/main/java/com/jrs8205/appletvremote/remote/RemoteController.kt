@@ -231,9 +231,8 @@ class RemoteController(
         val targets = if (macs.isEmpty()) emptyList() else withContext(Dispatchers.IO) {
             networkTargets.broadcastAddresses() + listOfNotNull(runCatching { InetAddress.getByName(settings.host) }.getOrNull())
         }
-        var rounds = 0
-        val result = WakeRetry(LG_WAKE_TIMEOUT_MS, LG_RETRY_DELAY_MS).run(
-            sendWake = { if (macs.isNotEmpty()) sendWakeOnLan(macs, targets, describe = rounds++ == 0) },
+        val outcome = WakeRetry(LG_WAKE_TIMEOUT_MS, LG_RETRY_DELAY_MS).run(
+            sendWake = { attempt -> if (macs.isNotEmpty()) sendWakeOnLan(macs, targets, describe = attempt == 1) },
             connect = {
                 lgTvClient(settings).use { client ->
                     client.register(settings)
@@ -241,11 +240,12 @@ class RemoteController(
                 }
             },
         )
-        val attempts = result.getOrElse { e ->
-            log.log { "LG TV did not respond after $rounds attempts: $e" }
+        val error = outcome.error
+        if (error != null) {
+            log.log { "LG TV did not respond after ${outcome.attempts} attempts: $error" }
             return
         }
-        log.log { "LG TV switched to ${settings.inputId} on attempt $attempts" }
+        log.log { "LG TV switched to ${settings.inputId} on attempt ${outcome.attempts}" }
         delay(LG_CEC_SETTLE_MS)
     }
 

@@ -4,6 +4,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -18,32 +19,33 @@ class WakeRetryTest {
         var attempts = 0
         val retry = WakeRetry(timeoutMs = 90_000, retryDelayMs = 1_000, now = { testScheduler.currentTime })
 
-        val result = retry.run(
-            sendWake = { events += "wake" },
+        val outcome = retry.run(
+            sendWake = { attempt -> events += "wake $attempt" },
             connect = {
                 events += "connect"
                 if (++attempts < 3) throw IOException("asleep")
             },
         )
 
-        assertEquals(3, result.getOrThrow())
-        assertEquals(listOf("wake", "connect", "wake", "connect", "wake", "connect"), events)
+        assertEquals(3, outcome.attempts)
+        assertNull(outcome.error)
+        assertEquals(listOf("wake 1", "connect", "wake 2", "connect", "wake 3", "connect"), events)
         assertEquals(2_000, testScheduler.currentTime)
     }
 
     @Test
-    fun givesUpWithTheLastErrorOnceTheDeadlinePasses() = runTest {
+    fun givesUpWithTheLastErrorAndTheAttemptCountOnceTheDeadlinePasses() = runTest {
         var wakes = 0
         var attempts = 0
         val retry = WakeRetry(timeoutMs = 5_000, retryDelayMs = 1_000, now = { testScheduler.currentTime })
 
-        val result = retry.run(
+        val outcome = retry.run(
             sendWake = { wakes++ },
             connect = { throw IOException("still asleep ${++attempts}") },
         )
 
-        assertTrue(result.isFailure)
-        assertEquals("still asleep 5", result.exceptionOrNull()?.message)
+        assertEquals(5, outcome.attempts)
+        assertEquals("still asleep 5", outcome.error?.message)
         assertEquals(attempts, wakes)
         assertTrue("the deadline stops the loop", testScheduler.currentTime >= 5_000)
     }
