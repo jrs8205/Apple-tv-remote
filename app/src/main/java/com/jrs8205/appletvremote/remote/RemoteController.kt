@@ -99,6 +99,8 @@ class RemoteController(
 
     private val commands = Channel<suspend CompanionClient.() -> Unit>(Channel.UNLIMITED)
     private val touchRecovery = AtomicBoolean(false)
+    /** A power tap is queued behind a connect attempt; a failure of that attempt must not spend 6 s on mDNS first. */
+    private val powerDecisionPending = AtomicBoolean(false)
     private val touchPump = TouchPump(scope) { sample ->
         val active = currentClient() ?: return@TouchPump
         try {
@@ -136,7 +138,10 @@ class RemoteController(
                 } catch (e: Exception) {
                     log.log { "command failed: $e" }
                     _state.update { it.copy(lastError = e) }
-                    if (e is CompanionException.ConnectionClosed) {
+                    if (e is CompanionException.ConnectionClosed && (_state.value.wakingTv || powerDecisionPending.get())) {
+                        // The wake-up waiting behind this command re-resolves the address itself; recovering here would only delay it.
+                        log.log { "skipping address recovery: ${if (_state.value.wakingTv) "wake-up" else "power tap"} queued" }
+                    } else if (e is CompanionException.ConnectionClosed) {
                         try {
                             recover(command)
                         } catch (e: CancellationException) {
@@ -173,7 +178,7 @@ class RemoteController(
     private suspend fun refreshAddress(device: PairedDevice): Boolean {
         val found = discover(ADDRESS_REFRESH_MS) { list -> list.firstOrNull { it.serviceName == device.name } }
         if (found == null) {
-            log.log { "${device.name} not found by mDNS within ${ADDRESS_REFRESH_MS / 1000} s" }
+            log.log { "${device.name} not resolved by mDNS within ${ADDRESS_REFRESH_MS / 1000} s" }
             return false
         }
         if (found.host == device.host && found.port == device.port) {
@@ -356,20 +361,42 @@ class RemoteController(
             log.log { "power tap ignored: wake-up already in progress" }
             return
         }
-        if (current.connection != ConnectionState.Ready) {
-            log.log { "power tap while ${current.connection}: waking the chain" }
-            wakeAndConnect()
-            return
-        }
-        log.log { "power tap while connected, TV status ${current.systemStatus}" }
-        enqueue {
-            try {
-                togglePowerConnected()
-            } catch (e: CompanionException) {
-                // The socket looked open but the TV had gone to sleep behind it: treat this as a wake request.
-                log.log { "power command failed on a stale connection, waking instead: $e" }
+        when (current.connection) {
+            ConnectionState.Ready -> {
+                log.log { "power tap while connected, TV status ${current.systemStatus}" }
+                enqueue { togglePowerOrWake() }
+            }
+            ConnectionState.Connecting -> {
+                // The queue runs this after the connect attempt in flight, so the TV has by then answered or not.
+                log.log { "power tap while connecting: deciding when the connect attempt ends" }
+                powerDecisionPending.set(true)
+                enqueue {
+                    powerDecisionPending.set(false)
+                    val after = _state.value
+                    when {
+                        after.wakingTv -> log.log { "power tap dropped: wake-up already in progress" }
+                        after.connection == ConnectionState.Ready -> togglePowerOrWake()
+                        else -> {
+                            log.log { "connect attempt ended in ${after.connection}: waking the chain" }
+                            wakeAndConnect()
+                        }
+                    }
+                }
+            }
+            else -> {
+                log.log { "power tap while ${current.connection}: waking the chain" }
                 wakeAndConnect()
             }
+        }
+    }
+
+    private suspend fun CompanionClient.togglePowerOrWake() {
+        try {
+            togglePowerConnected()
+        } catch (e: CompanionException) {
+            // The socket looked open but the TV had gone to sleep behind it: treat this as a wake request.
+            log.log { "power command failed on a stale connection, waking instead: $e" }
+            wakeAndConnect()
         }
     }
 
@@ -403,7 +430,8 @@ class RemoteController(
         backgroundDisconnect?.cancel()
         backgroundDisconnect = null
         val device = _state.value.device
-        log.log { "app in foreground, ${if (device == null) "no paired TV" else "connection ${_state.value.connection}"}" }
+        // The paired TV is still being read from disk when the app starts, so a missing device says nothing about pairing yet.
+        log.log { "app in foreground, ${if (device == null) "no paired TV loaded yet" else "connection ${_state.value.connection}"}" }
         if (device != null) connect()
     }
 

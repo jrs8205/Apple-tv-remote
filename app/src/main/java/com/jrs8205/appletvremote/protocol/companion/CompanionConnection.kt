@@ -180,6 +180,7 @@ class CompanionConnection(
             // A malformed frame must end this connection, never the process.
             failure = e
         } finally {
+            failure?.let { cause -> log.log { "connection lost: $cause" } }
             shutdown(failure)
         }
     }
