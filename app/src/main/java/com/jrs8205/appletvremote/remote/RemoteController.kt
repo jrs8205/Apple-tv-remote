@@ -221,44 +221,48 @@ class RemoteController(
         }
     }
 
-    /** Turns the LG TV on (Wake-on-LAN, then waits for its socket) and selects the Apple TV's input. */
+    /**
+     * Turns the LG TV on and selects the Apple TV's input. The magic packet goes out before every
+     * connection attempt until the TV's socket answers: on a Wi-Fi mesh the phone's ARP lookup of the
+     * sleeping TV succeeds only now and then, and a packet sent while it fails never leaves the phone.
+     */
     private suspend fun wakeThroughLgTv(settings: LgTvSettings) {
         val macs = settings.macAddress?.split(',')?.map(String::trim)?.filter(String::isNotEmpty).orEmpty()
-        if (macs.isNotEmpty()) {
-            withContext(Dispatchers.IO) {
-                val targets = networkTargets.broadcastAddresses() + listOfNotNull(runCatching { InetAddress.getByName(settings.host) }.getOrNull())
-                var delivered = 0
-                val failures = LinkedHashSet<String>()
-                repeat(3) {
-                    for (mac in macs) {
-                        runCatching { WakeOnLan.send(mac, targets, bind = networkTargets::bindToLan) }
-                            .onSuccess { failures += it.failures; delivered += it.delivered }
-                            .onFailure { failures += it.toString() }
-                    }
-                    delay(250)
-                }
-                log.log { "sent wake-on-lan to the LG TV: ${macs.size} addresses, $delivered packets via ${targets.joinToString { it.hostAddress }}" }
-                failures.forEach { failure -> log.log { "wake-on-lan send failed: $failure" } }
-            }
+        val targets = if (macs.isEmpty()) emptyList() else withContext(Dispatchers.IO) {
+            networkTargets.broadcastAddresses() + listOfNotNull(runCatching { InetAddress.getByName(settings.host) }.getOrNull())
         }
-        val deadline = System.currentTimeMillis() + LG_WAKE_TIMEOUT_MS
-        var lastError: Exception? = null
-        while (System.currentTimeMillis() < deadline) {
-            try {
+        var rounds = 0
+        val result = WakeRetry(LG_WAKE_TIMEOUT_MS, LG_RETRY_DELAY_MS).run(
+            sendWake = { if (macs.isNotEmpty()) sendWakeOnLan(macs, targets, describe = rounds++ == 0) },
+            connect = {
                 lgTvClient(settings).use { client ->
                     client.register(settings)
                     client.switchInput(settings.inputId)
                 }
-                log.log { "LG TV switched to ${settings.inputId}" }
-                delay(LG_CEC_SETTLE_MS)
-                return
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-                lastError = e
-                delay(LG_RETRY_DELAY_MS)
-            }
+            },
+        )
+        val attempts = result.getOrElse { e ->
+            log.log { "LG TV did not respond after $rounds attempts: $e" }
+            return
         }
-        log.log { "LG TV did not respond: $lastError" }
+        log.log { "LG TV switched to ${settings.inputId} on attempt $attempts" }
+        delay(LG_CEC_SETTLE_MS)
+    }
+
+    /** One burst of magic packets to every target; only the first burst is described in the log, failures always are. */
+    private suspend fun sendWakeOnLan(macs: List<String>, targets: List<InetAddress>, describe: Boolean) = withContext(Dispatchers.IO) {
+        var delivered = 0
+        val failures = LinkedHashSet<String>()
+        repeat(3) {
+            for (mac in macs) {
+                runCatching { WakeOnLan.send(mac, targets, bind = networkTargets::bindToLan) }
+                    .onSuccess { failures += it.failures; delivered += it.delivered }
+                    .onFailure { failures += it.toString() }
+            }
+            delay(250)
+        }
+        if (describe) log.log { "sent wake-on-lan to the LG TV: ${macs.size} addresses, $delivered packets via ${targets.joinToString { it.hostAddress }}" }
+        failures.forEach { failure -> log.log { "wake-on-lan send failed: $failure" } }
     }
 
     /**
