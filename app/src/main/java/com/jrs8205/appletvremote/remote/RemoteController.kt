@@ -36,6 +36,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -90,6 +92,10 @@ class RemoteController(
     private val clientModel: String,
     val log: ConnectionLog,
     private val timings: Timings = Timings(),
+    /** Opens a session with the LG TV at [host]; tests point this at a fake or a closed port. */
+    private val lgTvClients: (host: String, pinnedCertificate: String?) -> LgTvClient = { host, pin ->
+        LgTvClient(host, log, pinnedCertificate = pin, socketFactory = networkTargets.lanSocketFactory())
+    },
 ) {
 
     /** The delays and limits of the connection and wake-up logic; tests shorten them. */
@@ -100,7 +106,6 @@ class RemoteController(
         val addressRefreshMs: Long = 6_000,
         val lgWakeTimeoutMs: Long = 90_000,
         val lgRetryDelayMs: Long = 1_000,
-        val lgCecSettleMs: Long = 3_000,
     )
     private val _state = MutableStateFlow(RemoteState())
     val state: StateFlow<RemoteState> = _state.asStateFlow()
@@ -238,9 +243,12 @@ class RemoteController(
     }
 
     /**
-     * Wakes the chain: the LG TV is switched on over the network and told to select the Apple
-     * TV's HDMI input, which wakes the Apple TV through HDMI-CEC; then connect attempts repeat
-     * while everything boots.
+     * Wakes the chain. The LG TV is switched on over the network and told to select the Apple TV's
+     * HDMI input, which wakes the Apple TV through HDMI-CEC. Connect attempts on the Apple TV run at
+     * the same time: an Apple TV that is only dozing answers at once, and the wake button then turns
+     * the LG TV on through HDMI-CEC without waiting for it to answer the network. Attempts made while
+     * the LG TV is still being reached are not counted; once it has switched input the Apple TV gets
+     * the full number of attempts to boot, and if the LG TV never answered it gets one last try.
      */
     fun wakeAndConnect() {
         var claimed = false
@@ -261,22 +269,31 @@ class RemoteController(
                     val lgPart = if (settings.enabled && settings.host.isNotBlank()) "LG ${settings.host}, input ${settings.inputId}, MAC ${settings.macAddress ?: "unknown"}" else "no LG TV"
                     "wake-up started: $lgPart, Apple TV ${_state.value.device?.let { "${it.host}:${it.port}" } ?: "not paired"}"
                 }
-                if (settings.enabled && settings.host.isNotBlank()) wakeThroughLgTv(settings)
-                var attempt = 0
-                // The address and port may change while the TV boots, so every attempt asks for the client afresh.
-                while (true) {
-                    try {
-                        requireClient().ensureConnected()
-                        break
-                    } catch (e: CompanionException) {
-                        log.log { "Apple TV attempt ${attempt + 1}/${timings.wakeConnectAttempts} failed: $e" }
-                        if (++attempt >= timings.wakeConnectAttempts) throw e
-                        delay(timings.wakeRetryDelayMs)
-                        refreshAddress(_state.value.device ?: throw e)
+                coroutineScope {
+                    val lgPhase = if (settings.enabled && settings.host.isNotBlank()) async { wakeThroughLgTv(settings) } else null
+                    var attempt = 0
+                    // The address and port may change while the TV boots, so every attempt asks for the client afresh.
+                    while (true) {
+                        try {
+                            requireClient().ensureConnected()
+                            break
+                        } catch (e: CompanionException) {
+                            if (lgPhase?.isActive == true) {
+                                log.log { "Apple TV not reachable while the LG TV is being woken: $e" }
+                            } else {
+                                val allowed = if (lgPhase == null || lgPhase.await()) timings.wakeConnectAttempts else 1
+                                log.log { "Apple TV attempt ${attempt + 1}/$allowed failed: $e" }
+                                if (++attempt >= allowed) throw e
+                            }
+                            delay(timings.wakeRetryDelayMs)
+                            refreshAddress(_state.value.device ?: throw e)
+                        }
                     }
+                    requireClient().pressButton(HidButton.WAKE)
+                    _state.update { it.copy(systemStatus = SystemStatus.AWAKE) }
+                    // The LG TV may still be on its way; the wake-up is not over until it has been told which input to show.
+                    lgPhase?.await()
                 }
-                requireClient().pressButton(HidButton.WAKE)
-                _state.update { it.copy(systemStatus = SystemStatus.AWAKE) }
                 log.log { "wake-up done in ${(System.currentTimeMillis() - started) / 1000} s" }
             } catch (e: Exception) {
                 if (e !is CancellationException) log.log { "wake-up failed after ${(System.currentTimeMillis() - started) / 1000} s: $e" }
@@ -288,11 +305,12 @@ class RemoteController(
     }
 
     /**
-     * Turns the LG TV on and selects the Apple TV's input. The magic packet goes out before every
-     * connection attempt until the TV's socket answers: on a Wi-Fi mesh the phone's ARP lookup of the
-     * sleeping TV succeeds only now and then, and a packet sent while it fails never leaves the phone.
+     * Turns the LG TV on and selects the Apple TV's input; true once the input is selected. The magic
+     * packet goes out before every connection attempt until the TV's socket answers: on a Wi-Fi mesh
+     * the phone's ARP lookup of the sleeping TV succeeds only now and then, and a packet sent while it
+     * fails never leaves the phone.
      */
-    private suspend fun wakeThroughLgTv(settings: LgTvSettings) {
+    private suspend fun wakeThroughLgTv(settings: LgTvSettings): Boolean {
         val macs = settings.macAddress?.split(',')?.map(String::trim)?.filter(String::isNotEmpty).orEmpty()
         val targets = if (macs.isEmpty()) emptyList() else withContext(Dispatchers.IO) {
             networkTargets.broadcastAddresses() + listOfNotNull(runCatching { InetAddress.getByName(settings.host) }.getOrNull())
@@ -326,10 +344,10 @@ class RemoteController(
                 if (error is LgTvException && error.permanent) "LG TV refused on attempt ${outcome.attempts}, not retrying: $error"
                 else "LG TV did not respond after ${outcome.attempts} attempts: $error"
             }
-            return
+            return false
         }
         log.log { "LG TV switched to ${settings.inputId} on attempt ${outcome.attempts}" }
-        delay(timings.lgCecSettleMs)
+        return true
     }
 
     /** One burst of magic packets to every target; only the first burst is described in the log, failures always are. */
@@ -359,7 +377,7 @@ class RemoteController(
      */
     suspend fun pairLgTv(host: String, onPrompt: () -> Unit): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
-            LgTvClient(host, log, pinnedCertificate = null, socketFactory = networkTargets.lanSocketFactory()).use { client ->
+            lgTvClients(host, null).use { client ->
                 val key = client.connect(null, onPrompt)
                 lgTvRepository.setHost(host)
                 lgTvRepository.setClientKey(key)
@@ -386,8 +404,7 @@ class RemoteController(
         }
     }
 
-    private fun lgTvClient(settings: LgTvSettings) =
-        LgTvClient(settings.host, log, pinnedCertificate = settings.certificate, socketFactory = networkTargets.lanSocketFactory())
+    private fun lgTvClient(settings: LgTvSettings) = lgTvClients(settings.host, settings.certificate)
 
     /**
      * Registers with the stored key. A TV that has forgotten the app asks for permission on its screen and

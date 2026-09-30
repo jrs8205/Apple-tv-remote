@@ -9,6 +9,7 @@ import com.jrs8205.appletvremote.data.PlainCipher
 import com.jrs8205.appletvremote.discovery.DeviceDiscovery
 import com.jrs8205.appletvremote.discovery.DiscoveredDevice
 import com.jrs8205.appletvremote.discovery.NetworkTargets
+import com.jrs8205.appletvremote.lgtv.LgTvClient
 import com.jrs8205.appletvremote.protocol.companion.ConnectionState
 import com.jrs8205.appletvremote.protocol.companion.FakeAppleTv
 import com.jrs8205.appletvremote.protocol.companion.HidButton
@@ -30,6 +31,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.IOException
 import java.net.DatagramSocket
@@ -61,7 +64,6 @@ class RemoteControllerTest {
         addressRefreshMs = 500,
         lgWakeTimeoutMs = 1_500,
         lgRetryDelayMs = 100,
-        lgCecSettleMs = 50,
     )
     private val controller = RemoteController(
         scope = scope,
@@ -75,7 +77,10 @@ class RemoteControllerTest {
         clientModel = "Test",
         log = log,
         timings = timings,
+        lgTvClients = { host, pin -> LgTvClient(host, log, pinnedCertificate = pin, port = lgPort) },
     )
+    /** Where the LG TV would answer; nothing listens there unless a test says otherwise. */
+    private var lgPort = closedPort()
 
     private object Loopback : NetworkTargets {
         override fun bindToLan(socket: DatagramSocket) = Unit
@@ -181,5 +186,36 @@ class RemoteControllerTest {
         delay(1_000)
 
         assertEquals(0, lines.count { it.contains("resolved by mDNS") })
+    }
+
+    private suspend fun configureLgTv() {
+        lgTvRepository.setEnabled(true)
+        lgTvRepository.setHost("127.0.0.1")
+    }
+
+    @Test
+    fun theAppleTvIsWokenWhileTheLgTvIsStillBeingReached() = test {
+        pairWith()
+        configureLgTv()
+
+        controller.wakeAndConnect()
+
+        tv.awaitMessage("_hidC")
+        assertFalse("the LG phase had already given up", lines.any { it.contains("LG TV did not respond") })
+        controller.state.first { !it.wakingTv }
+        assertTrue("the wake-up waited for the LG phase", lines.any { it.contains("LG TV did not respond") })
+    }
+
+    @Test
+    fun attemptsMadeWhileTheLgTvIsBeingReachedAreNotCounted() = test {
+        pairWith(port = closedPort())
+        configureLgTv()
+
+        controller.wakeAndConnect()
+
+        controller.state.first { !it.wakingTv }
+        val failures = lines.filter { it.contains("Apple TV attempt") || it.contains("Apple TV not reachable") }
+        assertTrue("only ${failures.size} attempts: $failures", failures.size > timings.wakeConnectAttempts)
+        assertTrue(lines.any { it.contains("wake-up failed") })
     }
 }
