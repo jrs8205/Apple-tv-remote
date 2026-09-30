@@ -112,10 +112,11 @@ class RemoteController(
     private var backgroundDisconnect: Job? = null
     @Volatile private var pairing: PairingAttempt? = null
 
-    private val commands = Channel<suspend CompanionClient.() -> Unit>(Channel.UNLIMITED)
+    /** UI actions in order; each looks the TV's client up itself when its turn comes, so a lookup that fails only fails that action. */
+    private val commands = Channel<suspend () -> Unit>(Channel.UNLIMITED)
     private val touchRecovery = AtomicBoolean(false)
     /** The power decision queued behind a connect attempt, if any; a failure of that attempt must not spend 6 s on mDNS first. */
-    @Volatile private var pendingPowerDecision: (suspend CompanionClient.() -> Unit)? = null
+    @Volatile private var pendingPowerDecision: (suspend () -> Unit)? = null
     private val touchPump = TouchPump(scope) { sample ->
         val active = currentClient() ?: return@TouchPump
         try {
@@ -143,46 +144,49 @@ class RemoteController(
             }
         }
         scope.launch {
-            for (command in commands) {
-                // Cleared as soon as the decision leaves the queue, whether it runs or is skipped for lack of a client.
-                if (command === pendingPowerDecision) pendingPowerDecision = null
-                val active = currentClient() ?: continue
-                try {
-                    active.command()
-                    _state.update { it.copy(lastError = null) }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    log.log { "command failed: $e" }
-                    _state.update { it.copy(lastError = e) }
-                    if (e is CompanionException.ConnectionClosed && (_state.value.wakingTv || pendingPowerDecision != null)) {
-                        // The wake-up waiting behind this command re-resolves the address itself; recovering here would only delay it.
-                        log.log { "skipping address recovery: ${if (_state.value.wakingTv) "wake-up" else "power tap"} queued" }
-                    } else if (e is CompanionException.ConnectionClosed) {
-                        try {
-                            recover(command)
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            log.log { "recovery failed: $e" }
-                        }
-                    }
-                }
+            for (command in commands) run(command)
+        }
+    }
+
+    private suspend fun run(command: suspend () -> Unit) {
+        // Cleared as soon as the decision leaves the queue, whether it runs through or fails.
+        if (command === pendingPowerDecision) pendingPowerDecision = null
+        try {
+            command()
+            _state.update { it.copy(lastError = null) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.log { "command failed: $e" }
+            _state.update { it.copy(lastError = e) }
+            if (e !is CompanionException.ConnectionClosed) return
+            if (_state.value.wakingTv || pendingPowerDecision != null) {
+                // The wake-up waiting behind this command re-resolves the address itself; recovering here would only delay it.
+                log.log { "skipping address recovery: ${if (_state.value.wakingTv) "wake-up" else "power tap"} queued" }
+                return
+            }
+            try {
+                recover(command)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log.log { "recovery failed: $e" }
             }
         }
     }
 
     /**
-     * The Apple TV picks a new port on every boot and may get a new address, so a failed connect
-     * re-resolves it over mDNS and repeats the command once. A TV that is asleep stays unreachable
-     * until the power button wakes it through the LG TV.
+     * The Apple TV picks a new port on every boot and may get a new address, so a failed command
+     * re-resolves it over mDNS and repeats the command once. The repeat also happens when the address
+     * is unchanged but the TV is still on the network: a hand-over between mesh nodes drops the socket
+     * without moving the TV. A TV that mDNS no longer lists is asleep and stays unreachable until the
+     * power button wakes it through the LG TV.
      */
-    private suspend fun recover(command: suspend CompanionClient.() -> Unit) {
+    private suspend fun recover(command: suspend () -> Unit) {
         val device = _state.value.device ?: return
-        if (!refreshAddress(device)) return
-        val client = currentClient() ?: return
+        if (refreshAddress(device) == AddressCheck.UNRESOLVED) return
         try {
-            client.command()
+            command()
             _state.update { it.copy(lastError = null) }
         } catch (e: CancellationException) {
             throw e
@@ -191,21 +195,23 @@ class RemoteController(
         }
     }
 
-    /** Looks the TV up by name for a few seconds; stores and returns true when its address or port changed. */
-    private suspend fun refreshAddress(device: PairedDevice): Boolean {
+    private enum class AddressCheck { UNRESOLVED, UNCHANGED, CHANGED }
+
+    /** Looks the TV up by name for a few seconds and stores its address and port when they changed. */
+    private suspend fun refreshAddress(device: PairedDevice): AddressCheck {
         val found = discover(timings.addressRefreshMs) { list -> list.firstOrNull { it.serviceName == device.name } }
         if (found == null) {
             log.log { "${device.name} not resolved by mDNS within ${timings.addressRefreshMs / 1000} s" }
-            return false
+            return AddressCheck.UNRESOLVED
         }
         if (found.host == device.host && found.port == device.port) {
             log.log { "address unchanged: ${found.host}:${found.port}" }
-            return false
+            return AddressCheck.UNCHANGED
         }
         log.log { "address changed to ${found.host}:${found.port}" }
         deviceRepository.updateAddress(found.host, found.port)
         withTimeoutOrNull(2000) { _state.first { it.device?.host == found.host && it.device?.port == found.port } }
-        return true
+        return AddressCheck.CHANGED
     }
 
     /** Watches discovery for up to [timeoutMs] until [pick] yields a value; null on timeout or when discovery cannot start. */
@@ -224,9 +230,17 @@ class RemoteController(
      * while everything boots.
      */
     fun wakeAndConnect() {
+        var claimed = false
+        _state.update { current ->
+            claimed = !current.wakingTv
+            if (current.wakingTv) current else current.copy(wakingTv = true)
+        }
+        if (!claimed) {
+            log.log { "wake-up already in progress, not starting another" }
+            return
+        }
         val lg = lgTvRepository.settings
-        _state.update { it.copy(wakingTv = true) }
-        enqueue {
+        commands.trySend {
             val started = System.currentTimeMillis()
             try {
                 val settings = lg.first()
@@ -417,8 +431,9 @@ class RemoteController(
                         }
                     }
                 }
-                pendingPowerDecision = decision
-                enqueue(decision)
+                val queued = withClient(decision)
+                pendingPowerDecision = queued
+                commands.trySend(queued)
             }
             else -> {
                 log.log { "power tap while ${current.connection}: waking the chain" }
@@ -542,8 +557,11 @@ class RemoteController(
     }
 
     private fun enqueue(command: suspend CompanionClient.() -> Unit) {
-        commands.trySend(command)
+        commands.trySend(withClient(command))
     }
+
+    /** [command] as a queue item that looks the TV's client up when its turn comes. */
+    private fun withClient(command: suspend CompanionClient.() -> Unit): suspend () -> Unit = { requireClient().command() }
 
     private suspend fun requireClient(): CompanionClient = currentClient() ?: throw CompanionException.ConnectionClosed(null)
 

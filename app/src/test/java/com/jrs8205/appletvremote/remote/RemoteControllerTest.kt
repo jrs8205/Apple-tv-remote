@@ -11,6 +11,7 @@ import com.jrs8205.appletvremote.discovery.DiscoveredDevice
 import com.jrs8205.appletvremote.discovery.NetworkTargets
 import com.jrs8205.appletvremote.protocol.companion.ConnectionState
 import com.jrs8205.appletvremote.protocol.companion.FakeAppleTv
+import com.jrs8205.appletvremote.protocol.companion.HidButton
 import com.jrs8205.appletvremote.protocol.companion.PlainSocketConnector
 import com.jrs8205.appletvremote.protocol.crypto.Ed25519KeyPair
 import com.jrs8205.appletvremote.protocol.crypto.SecureRandomSource
@@ -29,6 +30,7 @@ import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import java.io.IOException
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.util.concurrent.CopyOnWriteArrayList
@@ -101,5 +103,55 @@ class RemoteControllerTest {
         controller.connect()
         awaitConnection(ConnectionState.Ready)
         assertEquals(1, tv.connectionCount)
+    }
+
+    @Test
+    fun aFailedClientLookupDoesNotStopTheQueue() = test {
+        pairWith()
+        dataStore.readFailure = IOException("settings unreadable")
+        controller.press(HidButton.MENU)
+        controller.state.first { it.lastError != null }
+        dataStore.readFailure = null
+
+        controller.press(HidButton.MENU)
+
+        tv.awaitMessage("_hidC")
+    }
+
+    @Test
+    fun aSecondWakeUpWhileOneIsRunningIsIgnored() = test {
+        pairWith()
+        controller.wakeAndConnect()
+        controller.wakeAndConnect()
+        controller.press(HidButton.MENU)
+
+        tv.awaitMessage("_hidC", timeoutMs = 8_000, skip = 2)
+
+        val wakes = tv.messages.count { it.name == "_hidC" && it.content["_hidC"] == HidButton.WAKE.code.toLong() && it.content["_hBtS"] == 1L }
+        assertEquals(1, wakes)
+        assertEquals(1, lines.count { it.contains("wake-up started") })
+    }
+
+    @Test
+    fun aPressLostToADroppedConnectionIsRetriedAtTheSameAddress() = test {
+        pairWith()
+        discovered.value = listOf(DiscoveredDevice("Living Room", "127.0.0.1", tv.port, "AppleTV14,1", null))
+        controller.connect()
+        awaitConnection(ConnectionState.Ready)
+        var dropped = false
+        tv.responder = { name, _ ->
+            if (name == "_hidC" && !dropped) {
+                dropped = true
+                tv.closeConnection()
+                null
+            } else {
+                tv.defaultReply(name)
+            }
+        }
+
+        controller.press(HidButton.MENU)
+
+        tv.awaitMessage("_hidC", skip = 1)
+        assertEquals(2, tv.connectionCount)
     }
 }
