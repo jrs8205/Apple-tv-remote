@@ -5,6 +5,7 @@ import com.jrs8205.appletvremote.data.IdentityRepository
 import com.jrs8205.appletvremote.data.LgTvRepository
 import com.jrs8205.appletvremote.data.LgTvSettings
 import com.jrs8205.appletvremote.lgtv.LgTvClient
+import com.jrs8205.appletvremote.lgtv.LgTvException
 import com.jrs8205.appletvremote.data.PairedDevice
 import com.jrs8205.appletvremote.discovery.DiscoveredDevice
 import com.jrs8205.appletvremote.discovery.NetworkTargets
@@ -256,7 +257,7 @@ class RemoteController(
             networkTargets.broadcastAddresses() + listOfNotNull(runCatching { InetAddress.getByName(settings.host) }.getOrNull())
         }
         var lastFailure: String? = null
-        val outcome = WakeRetry(LG_WAKE_TIMEOUT_MS, LG_RETRY_DELAY_MS).run(
+        val outcome = WakeRetry(LG_WAKE_TIMEOUT_MS, LG_RETRY_DELAY_MS, giveUp = { it is LgTvException && it.permanent }).run(
             sendWake = { attempt -> if (macs.isNotEmpty()) sendWakeOnLan(macs, targets, describe = attempt == 1) },
             connect = {
                 try {
@@ -276,7 +277,10 @@ class RemoteController(
         )
         val error = outcome.error
         if (error != null) {
-            log.log { "LG TV did not respond after ${outcome.attempts} attempts: $error" }
+            log.log {
+                if (error is LgTvException && error.permanent) "LG TV refused on attempt ${outcome.attempts}, not retrying: $error"
+                else "LG TV did not respond after ${outcome.attempts} attempts: $error"
+            }
             return
         }
         log.log { "LG TV switched to ${settings.inputId} on attempt ${outcome.attempts}" }

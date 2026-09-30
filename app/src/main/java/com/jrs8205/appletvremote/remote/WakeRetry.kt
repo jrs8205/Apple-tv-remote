@@ -14,6 +14,8 @@ internal class WakeRetry(
     private val timeoutMs: Long,
     private val retryDelayMs: Long,
     private val now: () -> Long = System::currentTimeMillis,
+    /** Recognises an error that waiting will not fix; the first such error ends the loop. */
+    private val giveUp: (Exception) -> Boolean = { false },
 ) {
 
     /** How many attempts were made and, when the TV never answered, the error of the last one. */
@@ -21,7 +23,7 @@ internal class WakeRetry(
 
     /**
      * Calls [sendWake] (with the attempt number, starting at 1) and then [connect] until [connect]
-     * returns normally or [timeoutMs] has passed.
+     * returns normally, [timeoutMs] has passed, or [connect] fails with an error [giveUp] accepts.
      */
     suspend fun run(sendWake: suspend (attempt: Int) -> Unit, connect: suspend () -> Unit): Outcome {
         val deadline = now() + timeoutMs
@@ -35,6 +37,7 @@ internal class WakeRetry(
                 return Outcome(attempts, null)
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
+                if (giveUp(e)) return Outcome(attempts, e)
                 lastError = e
                 delay(retryDelayMs)
             }

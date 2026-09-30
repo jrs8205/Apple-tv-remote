@@ -51,6 +51,20 @@ class WakeRetryTest {
     }
 
     @Test
+    fun anErrorTheCallerGivesUpOnEndsTheLoopAtOnce() = runTest {
+        var wakes = 0
+        val refused = IOException("certificate changed")
+        val retry = WakeRetry(timeoutMs = 90_000, retryDelayMs = 1_000, now = { testScheduler.currentTime }, giveUp = { it === refused })
+
+        val outcome = retry.run(sendWake = { wakes++ }, connect = { throw refused })
+
+        assertEquals(1, outcome.attempts)
+        assertSame(refused, outcome.error)
+        assertEquals(1, wakes)
+        assertEquals(0, testScheduler.currentTime)
+    }
+
+    @Test
     fun cancellationStopsTheLoopAtOnce() {
         var wakes = 0
         val cancelled = CancellationException("screen closed")

@@ -65,6 +65,7 @@ class LgTvClientTest {
         connectedAdapter: String? = "wifi",
         wired: Boolean = true,
         statesInInfo: Boolean = false,
+        refuseRegistration: Boolean = false,
     ) {
         val closed = CountDownLatch(1)
         serverSideClosed = closed
@@ -85,6 +86,10 @@ class LgTvClientTest {
                     val id = message.getString("id")
                     when (message.getString("type")) {
                         "register" -> {
+                            if (refuseRegistration) {
+                                webSocket.send(JSONObject().put("type", "error").put("id", id).put("error", "403 cancelled").toString())
+                                return
+                            }
                             if (prompt) webSocket.send(JSONObject().put("type", "response").put("id", id).put("payload", JSONObject().put("pairingType", "PROMPT")).toString())
                             webSocket.send(JSONObject().put("type", "registered").put("id", id).put("payload", JSONObject().put("client-key", "key-123")).toString())
                         }
@@ -199,8 +204,15 @@ class LgTvClientTest {
     fun refusesATvWhoseKeyDoesNotMatchThePin() = test {
         // No response is enqueued: the handshake must fail before any request reaches the server.
         val error = runCatching { client(pinned = "00".repeat(32)).use { it.connect("key-123") } }.exceptionOrNull()
-        assertTrue("got $error", error is LgTvException && error.message!!.contains("certificate"))
+        assertTrue("got $error", error is LgTvException && error.permanent && error.message!!.contains("certificate"))
         assertEquals(0, received.size)
+    }
+
+    @Test
+    fun aRegistrationTheTvRefusesIsPermanent() = test {
+        serveTv(refuseRegistration = true)
+        val error = runCatching { client().use { it.connect("key-123") } }.exceptionOrNull()
+        assertTrue("got $error", error is LgTvException && error.permanent && error.message!!.contains("403 cancelled"))
     }
 
     @Test
@@ -210,6 +222,7 @@ class LgTvClientTest {
             client.connect(null)
             val error = runCatching { client.switchInput("HDMI_9") }.exceptionOrNull()
             assertEquals("no such input", error?.message)
+            assertFalse("a failed request is worth retrying", (error as LgTvException).permanent)
         }
     }
 

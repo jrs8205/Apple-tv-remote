@@ -19,7 +19,8 @@ import javax.net.SocketFactory
 import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
 
-class LgTvException(message: String) : RuntimeException(message)
+/** [permanent] marks a failure that repeating the request cannot fix: a certificate that no longer matches the pin, or a registration the TV refused. */
+class LgTvException(message: String, val permanent: Boolean = false) : RuntimeException(message)
 
 /**
  * One WebSocket session with an LG webOS TV. Newer sets only accept `wss` on port 3001 with a
@@ -67,7 +68,7 @@ class LgTvClient(
         val id = "register_${ids.getAndIncrement()}"
         val reply = exchange(id, LgTvMessages.register(id, clientKey), timeoutMs)
         return reply.payload?.optString("client-key")?.takeIf { it.isNotEmpty() }
-            ?: throw LgTvException("TV did not return a client key (${reply.error ?: reply.type})")
+            ?: throw LgTvException("TV did not return a client key (${reply.error ?: reply.type})", permanent = true)
     }
 
     suspend fun switchInput(inputId: String) {
@@ -149,6 +150,7 @@ class LgTvClient(
                         failure != null -> "could not reach the TV: $failure"
                         else -> "could not reach the TV: timeout"
                     },
+                    permanent = trust.rejected,
                 )
             }
         } finally {
