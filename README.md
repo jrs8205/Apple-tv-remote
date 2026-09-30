@@ -31,7 +31,8 @@ An Apple TV in deep sleep does not answer on the network and ignores Wake-on-LAN
 app wakes it through the television instead. In Settings, LG TV, enter the TV's IP address and
 pair with it (the TV asks for confirmation on screen). Pairing reads the TV's input list and selects
 the input the TV labels as the Apple TV; check it under Apple TV input. The TV must have "Turn on
-via Wi-Fi" (or mobile) and SIMPLINK (HDMI-CEC) enabled. After that the power button on the remote turns the TV on, switches the input and connects.
+via Wi-Fi" (or mobile) and SIMPLINK (HDMI-CEC) enabled. After that the power button on the remote
+turns the TV on, switches the input and connects.
 
 The TV's certificate is pinned on pairing; if the TV ever presents a different one, pair again.
 
