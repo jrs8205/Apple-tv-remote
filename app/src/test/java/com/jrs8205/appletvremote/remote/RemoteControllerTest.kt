@@ -236,4 +236,17 @@ class RemoteControllerTest {
             assertEquals("key-123", settings.clientKey)
         }
     }
+
+    @Test
+    fun aFailedWakeUpIsNotRepeatedThroughAddressRecovery() = test {
+        val asleep = closedPort()
+        pairWith(port = asleep)
+        discovered.value = listOf(DiscoveredDevice("Living Room", "127.0.0.1", asleep, "AppleTV14,1", null))
+
+        controller.wakeAndConnect()
+
+        controller.state.first { !it.wakingTv }
+        delay(1_500)
+        assertEquals(1, lines.count { it.contains("wake-up started") })
+    }
 }

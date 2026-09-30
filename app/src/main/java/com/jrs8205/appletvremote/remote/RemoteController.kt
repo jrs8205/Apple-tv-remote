@@ -122,6 +122,8 @@ class RemoteController(
     private val commands = Channel<suspend () -> Unit>(Channel.UNLIMITED)
     private val touchRecovery = AtomicBoolean(false)
     private val connectPending = AtomicBoolean(false)
+    /** The wake-up chain in the queue, if any; it retries on its own and must not be repeated by address recovery. */
+    @Volatile private var wakeCommand: (suspend () -> Unit)? = null
     private val connectCommand: suspend () -> Unit = {
         try {
             requireClient().ensureConnected()
@@ -179,6 +181,7 @@ class RemoteController(
                 log.log { "not searching for the TV after a failed connect" }
                 return
             }
+            if (command === wakeCommand) return
             if (_state.value.wakingTv || pendingPowerDecision != null) {
                 // The wake-up waiting behind this command re-resolves the address itself; recovering here would only delay it.
                 log.log { "skipping address recovery: ${if (_state.value.wakingTv) "wake-up" else "power tap"} queued" }
@@ -262,7 +265,7 @@ class RemoteController(
             return
         }
         val lg = lgTvRepository.settings
-        commands.trySend {
+        val wake: suspend () -> Unit = {
             val started = System.currentTimeMillis()
             try {
                 val settings = lg.first()
@@ -303,6 +306,8 @@ class RemoteController(
                 _state.update { it.copy(wakingTv = false) }
             }
         }
+        wakeCommand = wake
+        commands.trySend(wake)
     }
 
     /**
