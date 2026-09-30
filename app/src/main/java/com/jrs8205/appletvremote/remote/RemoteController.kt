@@ -7,9 +7,9 @@ import com.jrs8205.appletvremote.data.LgTvSettings
 import com.jrs8205.appletvremote.lgtv.LgTvClient
 import com.jrs8205.appletvremote.lgtv.LgTvException
 import com.jrs8205.appletvremote.data.PairedDevice
+import com.jrs8205.appletvremote.discovery.DeviceDiscovery
 import com.jrs8205.appletvremote.discovery.DiscoveredDevice
 import com.jrs8205.appletvremote.discovery.NetworkTargets
-import com.jrs8205.appletvremote.discovery.NsdDiscovery
 import com.jrs8205.appletvremote.discovery.WakeOnLan
 import com.jrs8205.appletvremote.protocol.companion.CompanionException
 import com.jrs8205.appletvremote.protocol.companion.ClientInfo
@@ -84,12 +84,24 @@ class RemoteController(
     private val identityRepository: IdentityRepository,
     private val connector: SocketConnector,
     private val networkTargets: NetworkTargets,
-    private val discovery: NsdDiscovery,
+    private val discovery: DeviceDiscovery,
     private val lgTvRepository: LgTvRepository,
     private val clientName: String,
     private val clientModel: String,
     val log: ConnectionLog,
+    private val timings: Timings = Timings(),
 ) {
+
+    /** The delays and limits of the connection and wake-up logic; tests shorten them. */
+    data class Timings(
+        val backgroundDisconnectMs: Long = 30_000,
+        val wakeRetryDelayMs: Long = 4_000,
+        val wakeConnectAttempts: Int = 6,
+        val addressRefreshMs: Long = 6_000,
+        val lgWakeTimeoutMs: Long = 90_000,
+        val lgRetryDelayMs: Long = 1_000,
+        val lgCecSettleMs: Long = 3_000,
+    )
     private val _state = MutableStateFlow(RemoteState())
     val state: StateFlow<RemoteState> = _state.asStateFlow()
 
@@ -181,9 +193,9 @@ class RemoteController(
 
     /** Looks the TV up by name for a few seconds; stores and returns true when its address or port changed. */
     private suspend fun refreshAddress(device: PairedDevice): Boolean {
-        val found = discover(ADDRESS_REFRESH_MS) { list -> list.firstOrNull { it.serviceName == device.name } }
+        val found = discover(timings.addressRefreshMs) { list -> list.firstOrNull { it.serviceName == device.name } }
         if (found == null) {
-            log.log { "${device.name} not resolved by mDNS within ${ADDRESS_REFRESH_MS / 1000} s" }
+            log.log { "${device.name} not resolved by mDNS within ${timings.addressRefreshMs / 1000} s" }
             return false
         }
         if (found.host == device.host && found.port == device.port) {
@@ -230,9 +242,9 @@ class RemoteController(
                         requireClient().ensureConnected()
                         break
                     } catch (e: CompanionException) {
-                        log.log { "Apple TV attempt ${attempt + 1}/$WAKE_CONNECT_ATTEMPTS failed: $e" }
-                        if (++attempt >= WAKE_CONNECT_ATTEMPTS) throw e
-                        delay(WAKE_RETRY_DELAY_MS)
+                        log.log { "Apple TV attempt ${attempt + 1}/${timings.wakeConnectAttempts} failed: $e" }
+                        if (++attempt >= timings.wakeConnectAttempts) throw e
+                        delay(timings.wakeRetryDelayMs)
                         refreshAddress(_state.value.device ?: throw e)
                     }
                 }
@@ -260,7 +272,7 @@ class RemoteController(
         }
         var lastFailure: String? = null
         val outcome = try {
-            WakeRetry(LG_WAKE_TIMEOUT_MS, LG_RETRY_DELAY_MS, giveUp = { it is LgTvException && it.permanent }).run(
+            WakeRetry(timings.lgWakeTimeoutMs, timings.lgRetryDelayMs, giveUp = { it is LgTvException && it.permanent }).run(
                 sendWake = { attempt -> if (macs.isNotEmpty()) sendWakeOnLan(macs, targets, describe = attempt == 1) },
                 connect = {
                     try {
@@ -290,7 +302,7 @@ class RemoteController(
             return
         }
         log.log { "LG TV switched to ${settings.inputId} on attempt ${outcome.attempts}" }
-        delay(LG_CEC_SETTLE_MS)
+        delay(timings.lgCecSettleMs)
     }
 
     /** One burst of magic packets to every target; only the first burst is described in the log, failures always are. */
@@ -461,11 +473,11 @@ class RemoteController(
     }
 
     fun onAppBackground(keepAlive: Boolean) {
-        log.log { if (keepAlive) "app in background, keeping the connection for the media notification" else "app in background, disconnecting in ${BACKGROUND_DISCONNECT_MS / 1000} s" }
+        log.log { if (keepAlive) "app in background, keeping the connection for the media notification" else "app in background, disconnecting in ${timings.backgroundDisconnectMs / 1000} s" }
         if (keepAlive) return
         backgroundDisconnect?.cancel()
         backgroundDisconnect = scope.launch {
-            delay(BACKGROUND_DISCONNECT_MS)
+            delay(timings.backgroundDisconnectMs)
             log.log { "background disconnect" }
             clientMutex.withLock { client?.disconnect() }
         }
@@ -589,15 +601,5 @@ class RemoteController(
             stale.disconnect()
             _state.update { it.copy(connection = ConnectionState.Disconnected, systemStatus = SystemStatus.UNKNOWN, media = MediaCapabilities(0), keyboard = null) }
         }
-    }
-
-    private companion object {
-        const val BACKGROUND_DISCONNECT_MS = 30_000L
-        const val WAKE_RETRY_DELAY_MS = 4_000L
-        const val WAKE_CONNECT_ATTEMPTS = 6
-        const val ADDRESS_REFRESH_MS = 6_000L
-        const val LG_WAKE_TIMEOUT_MS = 90_000L
-        const val LG_RETRY_DELAY_MS = 1_000L
-        const val LG_CEC_SETTLE_MS = 3_000L
     }
 }

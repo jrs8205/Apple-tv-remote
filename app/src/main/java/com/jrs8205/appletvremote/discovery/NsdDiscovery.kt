@@ -22,13 +22,13 @@ data class DiscoveredDevice(
 )
 
 /** Browses `_companion-link._tcp` and keeps a list of Apple TVs with a usable IPv4 address. */
-class NsdDiscovery(context: Context, private val log: ProtocolLog? = null) {
+class NsdDiscovery(context: Context, private val log: ProtocolLog? = null) : DeviceDiscovery {
 
     private val nsdManager = context.getSystemService(NsdManager::class.java)
     private val wifiManager = context.applicationContext.getSystemService(WifiManager::class.java)
     private val executor = Executors.newSingleThreadExecutor()
 
-    fun devices(): Flow<List<DiscoveredDevice>> = callbackFlow {
+    override fun devices(): Flow<List<DiscoveredDevice>> = callbackFlow {
         val lock = wifiManager?.createMulticastLock(LOCK_TAG)?.apply {
             setReferenceCounted(false)
             acquire()
