@@ -193,8 +193,11 @@ class LgTvClient(
             val incoming = LgTvMessages.parse(text) ?: return
             val id = incoming.id ?: return
             if (incoming.type == "response" && incoming.payload?.optString("pairingType") == "PROMPT") {
-                log.log { "LG TV asks for permission on its screen" }
-                pairingPrompted?.invoke()
+                // A prompt can arrive after the registration timed out, during the close handshake; nobody is waiting for it then.
+                if (waiters.containsKey(id)) {
+                    log.log { "LG TV asks for permission on its screen" }
+                    pairingPrompted?.invoke()
+                }
                 return
             }
             waiters[id]?.complete(incoming)

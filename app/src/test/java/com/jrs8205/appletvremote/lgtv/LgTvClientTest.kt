@@ -118,6 +118,16 @@ class LgTvClientTest {
     }
 
     @Test
+    fun aPromptThatArrivesAfterTheRegistrationTimedOutIsIgnored() = test {
+        lg.serve(delayMs = 600, prompt = true)
+        var prompted = false
+        val error = runCatching { client().use { it.connect(null, onPrompt = { prompted = true }, timeoutMs = 300) } }.exceptionOrNull()
+        assertTrue("got $error", error is LgTvException && error.message!!.contains("no reply"))
+        delay(1_000)
+        assertFalse("a prompt for a registration that already failed was reported", prompted)
+    }
+
+    @Test
     fun sendsTheStoredKeyWhenReconnecting() = test {
         lg.serve()
         client(pinned = lg.certificatePin).use { it.connect("key-123") }
