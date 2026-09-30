@@ -61,6 +61,8 @@ data class RemoteState(
     val media: MediaCapabilities = MediaCapabilities(0),
     val keyboard: TextInputState? = null,
     val wakingTv: Boolean = false,
+    /** The LG TV is asking on its screen whether to allow this app; nothing proceeds until someone answers there. */
+    val lgTvPrompt: Boolean = false,
     val lastError: Throwable? = null,
 )
 
@@ -257,24 +259,28 @@ class RemoteController(
             networkTargets.broadcastAddresses() + listOfNotNull(runCatching { InetAddress.getByName(settings.host) }.getOrNull())
         }
         var lastFailure: String? = null
-        val outcome = WakeRetry(LG_WAKE_TIMEOUT_MS, LG_RETRY_DELAY_MS, giveUp = { it is LgTvException && it.permanent }).run(
-            sendWake = { attempt -> if (macs.isNotEmpty()) sendWakeOnLan(macs, targets, describe = attempt == 1) },
-            connect = {
-                try {
-                    lgTvClient(settings).use { client ->
-                        client.register(settings)
-                        client.switchInput(settings.inputId)
+        val outcome = try {
+            WakeRetry(LG_WAKE_TIMEOUT_MS, LG_RETRY_DELAY_MS, giveUp = { it is LgTvException && it.permanent }).run(
+                sendWake = { attempt -> if (macs.isNotEmpty()) sendWakeOnLan(macs, targets, describe = attempt == 1) },
+                connect = {
+                    try {
+                        lgTvClient(settings).use { client ->
+                            client.register(settings)
+                            client.switchInput(settings.inputId)
+                        }
+                    } catch (e: Exception) {
+                        // The same failure repeats every second while the TV boots; only a change in it is news.
+                        if (e !is CancellationException && e.toString() != lastFailure) {
+                            lastFailure = e.toString()
+                            log.log { "LG TV attempt failed: $e" }
+                        }
+                        throw e
                     }
-                } catch (e: Exception) {
-                    // The same failure repeats every second while the TV boots; only a change in it is news.
-                    if (e !is CancellationException && e.toString() != lastFailure) {
-                        lastFailure = e.toString()
-                        log.log { "LG TV attempt failed: $e" }
-                    }
-                    throw e
-                }
-            },
-        )
+                },
+            )
+        } finally {
+            _state.update { it.copy(lgTvPrompt = false) }
+        }
         val error = outcome.error
         if (error != null) {
             log.log {
@@ -330,9 +336,13 @@ class RemoteController(
         runCatching {
             val settings = lgTvRepository.settings.first()
             if (!settings.enabled || settings.host.isBlank()) throw IllegalStateException("LG TV not configured")
-            lgTvClient(settings).use { client ->
-                client.register(settings)
-                client.turnOff()
+            try {
+                lgTvClient(settings).use { client ->
+                    client.register(settings)
+                    client.turnOff()
+                }
+            } finally {
+                _state.update { it.copy(lgTvPrompt = false) }
             }
         }
     }
@@ -340,9 +350,17 @@ class RemoteController(
     private fun lgTvClient(settings: LgTvSettings) =
         LgTvClient(settings.host, log, pinnedCertificate = settings.certificate, socketFactory = networkTargets.lanSocketFactory())
 
-    /** Registers with the stored key; a TV paired before certificates were recorded gets its key pinned on this first use. */
+    /**
+     * Registers with the stored key. A TV that has forgotten the app asks for permission on its screen and
+     * hands out a new key, which replaces the stored one so the question is not asked again on every wake-up.
+     * A TV paired before certificates were recorded gets its key pinned on this first use.
+     */
     private suspend fun LgTvClient.register(settings: LgTvSettings) {
-        connect(settings.clientKey, timeoutMs = 15_000)
+        val key = connect(settings.clientKey, onPrompt = { _state.update { it.copy(lgTvPrompt = true) } }, timeoutMs = 15_000)
+        if (key != settings.clientKey) {
+            log.log { "LG TV issued a new client key, replacing the stored one" }
+            lgTvRepository.setClientKey(key)
+        }
         if (settings.certificate == null) certificate?.let { lgTvRepository.setCertificate(it) }
     }
 

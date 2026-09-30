@@ -85,7 +85,14 @@ fun RemoteScreen(viewModel: RemoteViewModel, onOpenSettings: () -> Unit) {
         ) {
             Column(Modifier.weight(1f)) {
                 Text(state.device?.name ?: stringResource(R.string.app_name), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Text(if (state.wakingTv) stringResource(R.string.state_waking_tv) else connectionLabel(state.connection), style = MaterialTheme.typography.bodySmall)
+                Text(
+                    when {
+                        state.lgTvPrompt -> stringResource(R.string.settings_lg_prompted)
+                        state.wakingTv -> stringResource(R.string.state_waking_tv)
+                        else -> connectionLabel(state.connection)
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
             IconButton(onClick = { showKeyboard = true }) { Icon(Icons.Default.Keyboard, contentDescription = stringResource(R.string.cd_keyboard)) }
             IconButton(onClick = onOpenSettings) { Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.cd_settings)) }
