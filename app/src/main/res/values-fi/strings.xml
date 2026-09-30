@@ -38,6 +38,8 @@
     <string name="state_connecting">Yhdistetään…</string>
     <string name="state_connected">Yhdistetty</string>
     <string name="state_failed">Yhteys epäonnistui</string>
+    <string name="failure_tv_unreachable">Apple TV ei vastannut.</string>
+    <string name="failure_pairing_rejected">Apple TV ei enää hyväksy tätä paritusta. Parita uudelleen asetuksissa.</string>
 
     <string name="remote_select">OK</string>
     <string name="remote_select_hold">Pidä OK pohjassa</string>

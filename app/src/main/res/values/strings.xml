@@ -38,6 +38,8 @@
     <string name="state_connecting">Connecting…</string>
     <string name="state_connected">Connected</string>
     <string name="state_failed">Connection failed</string>
+    <string name="failure_tv_unreachable">The Apple TV did not answer.</string>
+    <string name="failure_pairing_rejected">The Apple TV no longer accepts this pairing. Pair again in settings.</string>
 
     <string name="remote_select">OK</string>
     <string name="remote_select_hold">Hold OK</string>

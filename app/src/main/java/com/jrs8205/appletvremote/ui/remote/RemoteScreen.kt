@@ -46,9 +46,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.jrs8205.appletvremote.R
+import com.jrs8205.appletvremote.protocol.companion.CompanionException
 import com.jrs8205.appletvremote.protocol.companion.ConnectionState
 import com.jrs8205.appletvremote.protocol.companion.HidButton
 import com.jrs8205.appletvremote.protocol.companion.TouchPhase
+import com.jrs8205.appletvremote.protocol.pairing.PairingException
 import com.jrs8205.appletvremote.ui.keyboard.TextInputSheet
 import com.jrs8205.appletvremote.ui.theme.RemoteColors
 
@@ -93,6 +95,10 @@ fun RemoteScreen(viewModel: RemoteViewModel, onOpenSettings: () -> Unit) {
                     },
                     style = MaterialTheme.typography.bodySmall,
                 )
+                val failure = state.connection as? ConnectionState.Failed
+                if (failure != null && !state.wakingTv) {
+                    Text(failureLabel(failure.reason), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
             }
             IconButton(onClick = { showKeyboard = true }) { Icon(Icons.Default.Keyboard, contentDescription = stringResource(R.string.cd_keyboard)) }
             IconButton(onClick = onOpenSettings) { Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.cd_settings)) }
@@ -226,6 +232,14 @@ fun connectionLabel(state: ConnectionState): String = when (state) {
     ConnectionState.Connecting -> stringResource(R.string.state_connecting)
     ConnectionState.Ready -> stringResource(R.string.state_connected)
     is ConnectionState.Failed -> stringResource(R.string.state_failed)
+}
+
+/** One line on why the last connection failed, in words a viewer of the log screen would not need. */
+@Composable
+fun failureLabel(reason: Throwable): String = when (reason) {
+    is CompanionException.ConnectionClosed -> stringResource(R.string.failure_tv_unreachable)
+    is PairingException.CredentialsRejected -> stringResource(R.string.failure_pairing_rejected)
+    else -> reason.message ?: reason.javaClass.simpleName
 }
 
 /** How long a held button stays down: enough for tvOS to open Control Center from the TV button and the app options from OK. */
