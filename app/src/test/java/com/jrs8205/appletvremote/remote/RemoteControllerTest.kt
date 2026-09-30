@@ -9,6 +9,8 @@ import com.jrs8205.appletvremote.data.PlainCipher
 import com.jrs8205.appletvremote.discovery.DeviceDiscovery
 import com.jrs8205.appletvremote.discovery.DiscoveredDevice
 import com.jrs8205.appletvremote.discovery.NetworkTargets
+import com.jrs8205.appletvremote.lgtv.FakeLgTv
+import com.jrs8205.appletvremote.lgtv.LgInput
 import com.jrs8205.appletvremote.lgtv.LgTvClient
 import com.jrs8205.appletvremote.protocol.companion.ConnectionState
 import com.jrs8205.appletvremote.protocol.companion.FakeAppleTv
@@ -217,5 +219,21 @@ class RemoteControllerTest {
         val failures = lines.filter { it.contains("Apple TV attempt") || it.contains("Apple TV not reachable") }
         assertTrue("only ${failures.size} attempts: $failures", failures.size > timings.wakeConnectAttempts)
         assertTrue(lines.any { it.contains("wake-up failed") })
+    }
+
+    @Test
+    fun pairingWithTheLgTvLearnsWhichInputTheAppleTvIsOn() = test {
+        FakeLgTv().use { lg ->
+            lgPort = lg.port
+            lg.serve(prompt = true, inputs = listOf(LgInput("HDMI_1", "HDMI 1", connected = false), LgInput("HDMI_2", "Apple TV", connected = true)))
+
+            val result = controller.pairLgTv("127.0.0.1") {}
+
+            assertTrue("pairing failed: $result", result.isSuccess)
+            val settings = lgTvRepository.settings.first()
+            assertEquals("HDMI_2", settings.inputId)
+            assertEquals(listOf("HDMI 1", "Apple TV"), settings.inputs.map { it.label })
+            assertEquals("key-123", settings.clientKey)
+        }
     }
 }

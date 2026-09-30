@@ -8,9 +8,12 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.jrs8205.appletvremote.lgtv.LgInput
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.UUID
 
 val Context.appDataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -131,6 +134,8 @@ data class LgTvSettings(
     val macAddress: String? = null,
     val clientKey: String? = null,
     val inputId: String = "HDMI_1",
+    /** The inputs the TV listed when pairing, so the settings can name them. */
+    val inputs: List<LgInput> = emptyList(),
     /** SPKI SHA-256 of the TV's certificate, learned when pairing; later connections accept only this key. */
     val certificate: String? = null,
 )
@@ -145,6 +150,7 @@ class LgTvRepository(private val dataStore: DataStore<Preferences>) {
             macAddress = prefs[MAC],
             clientKey = prefs[CLIENT_KEY],
             inputId = prefs[INPUT] ?: "HDMI_1",
+            inputs = prefs[INPUTS]?.let(::decodeInputs).orEmpty(),
             certificate = prefs[CERTIFICATE],
         )
     }
@@ -154,6 +160,7 @@ class LgTvRepository(private val dataStore: DataStore<Preferences>) {
     suspend fun setMacAddress(mac: String?) = dataStore.edit { if (mac.isNullOrBlank()) it.remove(MAC) else it[MAC] = mac }
     suspend fun setClientKey(key: String?) = dataStore.edit { if (key.isNullOrBlank()) it.remove(CLIENT_KEY) else it[CLIENT_KEY] = key }
     suspend fun setInputId(inputId: String) = dataStore.edit { it[INPUT] = inputId }
+    suspend fun setInputs(inputs: List<LgInput>) = dataStore.edit { it[INPUTS] = encodeInputs(inputs) }
     suspend fun setCertificate(spkiSha256: String?) = dataStore.edit { if (spkiSha256.isNullOrBlank()) it.remove(CERTIFICATE) else it[CERTIFICATE] = spkiSha256 }
 
     private companion object {
@@ -162,7 +169,19 @@ class LgTvRepository(private val dataStore: DataStore<Preferences>) {
         val MAC = stringPreferencesKey("lg_mac")
         val CLIENT_KEY = stringPreferencesKey("lg_client_key")
         val INPUT = stringPreferencesKey("lg_input")
+        val INPUTS = stringPreferencesKey("lg_inputs")
         val CERTIFICATE = stringPreferencesKey("lg_certificate")
+
+        fun encodeInputs(inputs: List<LgInput>): String =
+            JSONArray(inputs.map { JSONObject().put("id", it.id).put("label", it.label).put("connected", it.connected) }).toString()
+
+        fun decodeInputs(text: String): List<LgInput> = runCatching {
+            val array = JSONArray(text)
+            (0 until array.length()).map { index ->
+                val item = array.getJSONObject(index)
+                LgInput(item.getString("id"), item.getString("label"), item.optBoolean("connected", false))
+            }
+        }.getOrDefault(emptyList())
     }
 }
 

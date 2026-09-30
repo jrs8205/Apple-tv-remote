@@ -6,6 +6,7 @@ import com.jrs8205.appletvremote.data.LgTvRepository
 import com.jrs8205.appletvremote.data.LgTvSettings
 import com.jrs8205.appletvremote.lgtv.LgTvClient
 import com.jrs8205.appletvremote.lgtv.LgTvException
+import com.jrs8205.appletvremote.lgtv.appleTv
 import com.jrs8205.appletvremote.data.PairedDevice
 import com.jrs8205.appletvremote.discovery.DeviceDiscovery
 import com.jrs8205.appletvremote.discovery.DiscoveredDevice
@@ -373,7 +374,8 @@ class RemoteController(
 
     /**
      * Pairs with the LG TV: the TV shows a prompt, the key it returns is stored together with the
-     * TV's certificate, which later connections insist on. Also learns its MAC.
+     * TV's certificate, which later connections insist on. Also learns its MAC and its inputs, and
+     * selects the input the TV itself labels as the Apple TV.
      */
     suspend fun pairLgTv(host: String, onPrompt: () -> Unit): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
@@ -383,6 +385,11 @@ class RemoteController(
                 lgTvRepository.setClientKey(key)
                 lgTvRepository.setCertificate(client.certificate)
                 client.macAddresses().takeIf { it.isNotEmpty() }?.let { lgTvRepository.setMacAddress(it.joinToString(",")) }
+                val inputs = client.externalInputs()
+                lgTvRepository.setInputs(inputs)
+                val appleTv = inputs.appleTv()
+                log.log { "LG TV inputs: ${inputs.joinToString { "${it.label} (${it.id})" }.ifEmpty { "none listed" }}; Apple TV input ${appleTv?.id ?: "not identified, left as is"}" }
+                if (appleTv != null) lgTvRepository.setInputId(appleTv.id)
             }
             Unit
         }

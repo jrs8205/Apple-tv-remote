@@ -79,6 +79,17 @@ class LgTvClient(
         request("ssap://system/turnOff")
     }
 
+    /** The TV's external inputs in its own order; empty when it does not answer. */
+    suspend fun externalInputs(): List<LgInput> {
+        val reply = answered { request("ssap://tv/getExternalInputList") } ?: return emptyList()
+        val devices = reply.optJSONArray("devices") ?: return emptyList()
+        return (0 until devices.length()).mapNotNull { index ->
+            val device = devices.optJSONObject(index) ?: return@mapNotNull null
+            val id = device.optString("id").takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            LgInput(id, device.optString("label").ifEmpty { id }, device.optBoolean("connected", false))
+        }
+    }
+
     /**
      * The MAC address of the adapter the TV is connected through, which is the one Wake-on-LAN
      * must target. When the TV does not say which adapter is in use, every address it reports.

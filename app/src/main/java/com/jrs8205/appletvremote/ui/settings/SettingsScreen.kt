@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -190,12 +191,14 @@ private fun LgTvSection(viewModel: SettingsViewModel) {
         ListItem(
             headlineContent = { Text(stringResource(R.string.settings_lg_input)) },
             supportingContent = {
-                Row {
-                    listOf("HDMI_1", "HDMI_2", "HDMI_3", "HDMI_4").forEach { input ->
+                // The TV's own list, with its labels, once pairing has fetched it; plain HDMI numbers before that.
+                val inputs = lg.inputs.map { it.id to it.label }.ifEmpty { listOf("HDMI_1", "HDMI_2", "HDMI_3", "HDMI_4").map { it to it.replace('_', ' ') } }
+                Row(Modifier.horizontalScroll(rememberScrollState())) {
+                    inputs.forEach { (input, label) ->
                         FilterChip(
                             selected = input == lg.inputId,
                             onClick = { viewModel.setLgInput(input) },
-                            label = { Text(input.replace('_', ' ')) },
+                            label = { Text(label) },
                             modifier = Modifier.padding(end = 8.dp),
                         )
                     }
