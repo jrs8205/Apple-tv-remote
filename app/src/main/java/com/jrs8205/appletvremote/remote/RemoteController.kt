@@ -115,6 +115,14 @@ class RemoteController(
     /** UI actions in order; each looks the TV's client up itself when its turn comes, so a lookup that fails only fails that action. */
     private val commands = Channel<suspend () -> Unit>(Channel.UNLIMITED)
     private val touchRecovery = AtomicBoolean(false)
+    private val connectPending = AtomicBoolean(false)
+    private val connectCommand: suspend () -> Unit = {
+        try {
+            requireClient().ensureConnected()
+        } finally {
+            connectPending.set(false)
+        }
+    }
     /** The power decision queued behind a connect attempt, if any; a failure of that attempt must not spend 6 s on mDNS first. */
     @Volatile private var pendingPowerDecision: (suspend () -> Unit)? = null
     private val touchPump = TouchPump(scope) { sample ->
@@ -160,6 +168,11 @@ class RemoteController(
             log.log { "command failed: $e" }
             _state.update { it.copy(lastError = e) }
             if (e !is CompanionException.ConnectionClosed) return
+            if (command === connectCommand) {
+                // A TV that is asleep is the usual reason; the next button or power tap searches for it if it is not.
+                log.log { "not searching for the TV after a failed connect" }
+                return
+            }
             if (_state.value.wakingTv || pendingPowerDecision != null) {
                 // The wake-up waiting behind this command re-resolves the address itself; recovering here would only delay it.
                 log.log { "skipping address recovery: ${if (_state.value.wakingTv) "wake-up" else "power tap"} queued" }
@@ -476,7 +489,11 @@ class RemoteController(
         _state.update { it.copy(keyboard = state) }
     }
 
-    fun connect() = enqueue { ensureConnected() }
+    /** Opens the session unless a connect is already queued or running: the remote screen and the foreground callback both ask on one launch. */
+    fun connect() {
+        if (!connectPending.compareAndSet(false, true)) return
+        commands.trySend(connectCommand)
+    }
 
     fun onAppForeground() {
         backgroundDisconnect?.cancel()

@@ -23,6 +23,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -33,6 +34,7 @@ import org.junit.Test
 import java.io.IOException
 import java.net.DatagramSocket
 import java.net.InetAddress
+import java.net.ServerSocket
 import java.util.concurrent.CopyOnWriteArrayList
 import javax.net.SocketFactory
 
@@ -97,6 +99,11 @@ class RemoteControllerTest {
 
     private suspend fun awaitConnection(expected: ConnectionState) = controller.state.first { it.connection == expected }
 
+    private suspend fun awaitFailure() = controller.state.first { it.connection is ConnectionState.Failed }
+
+    /** A port nobody listens on, so connecting fails at once. */
+    private fun closedPort(): Int = ServerSocket(0).use { it.localPort }
+
     @Test
     fun connectOpensASessionWithThePairedTv() = test {
         pairWith()
@@ -153,5 +160,26 @@ class RemoteControllerTest {
 
         tv.awaitMessage("_hidC", skip = 1)
         assertEquals(2, tv.connectionCount)
+    }
+
+    @Test
+    fun connectRequestsQueuedTogetherOpenOneSession() = test {
+        pairWith(port = closedPort())
+        controller.connect()
+        controller.connect()
+        awaitFailure()
+        delay(1_500)
+
+        assertEquals(1, lines.count { it.contains("connecting to") })
+    }
+
+    @Test
+    fun aFailedConnectDoesNotSearchForTheTv() = test {
+        pairWith(port = closedPort())
+        controller.connect()
+        awaitFailure()
+        delay(1_000)
+
+        assertEquals(0, lines.count { it.contains("resolved by mDNS") })
     }
 }
