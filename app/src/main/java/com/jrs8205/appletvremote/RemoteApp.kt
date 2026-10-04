@@ -11,9 +11,11 @@ import com.jrs8205.appletvremote.protocol.companion.PlayState
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.DefaultMediaNotificationProvider
 import com.jrs8205.appletvremote.service.media.RemoteMediaService
+import com.jrs8205.appletvremote.service.wake.WakeService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import androidx.annotation.OptIn
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
@@ -86,6 +88,15 @@ class RemoteApp : Application() {
                     runCatching { startService(Intent(this@RemoteApp, RemoteMediaService::class.java)) }
                         .onSuccess { container.connectionLog.log { "media service started" } }
                         .onFailure { container.connectionLog.log { "media service start failed: $it" } }
+                }
+            }
+        }
+        container.appScope.launch {
+            container.remoteController.state.map { it.wakingTv }.distinctUntilChanged().collect { waking ->
+                // Started the moment the power tap claims the wake-up, while the app is still on screen; it stops itself at the end.
+                if (waking) {
+                    runCatching { startForegroundService(Intent(this@RemoteApp, WakeService::class.java)) }
+                        .onFailure { container.connectionLog.log { "wake service start failed: $it" } }
                 }
             }
         }
