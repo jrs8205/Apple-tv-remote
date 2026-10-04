@@ -119,5 +119,8 @@
     <string name="settings_lg_mac_hint">Täytetään automaattisesti, kun paritus onnistuu. Tarvitaan television käynnistämiseen valmiustilasta.</string>
     <string name="settings_lg_turn_off">Sammuta televisio nyt</string>
     <string name="state_waking_tv">Käynnistetään televisiota…</string>
+    <string name="state_waking_lg_tv">Odotetaan television käynnistymistä… %1$d s</string>
+    <string name="state_waking_apple_tv">Odotetaan Apple TV:tä… %1$d s</string>
+    <string name="wake_channel">Television käynnistys</string>
     <string name="save">Tallenna</string>
 </resources>

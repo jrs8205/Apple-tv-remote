@@ -37,6 +37,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -51,8 +52,11 @@ import com.jrs8205.appletvremote.protocol.companion.ConnectionState
 import com.jrs8205.appletvremote.protocol.companion.HidButton
 import com.jrs8205.appletvremote.protocol.companion.TouchPhase
 import com.jrs8205.appletvremote.protocol.pairing.PairingException
+import com.jrs8205.appletvremote.remote.WakeProgress
+import com.jrs8205.appletvremote.remote.WakeStage
 import com.jrs8205.appletvremote.ui.keyboard.TextInputSheet
 import com.jrs8205.appletvremote.ui.theme.RemoteColors
+import kotlinx.coroutines.delay
 
 /** The Siri Remote layout, anchored to the bottom of the screen so every control sits under the thumb. */
 @Composable
@@ -90,7 +94,7 @@ fun RemoteScreen(viewModel: RemoteViewModel, onOpenSettings: () -> Unit) {
                 Text(
                     when {
                         state.lgTvPrompt -> stringResource(R.string.settings_lg_prompted)
-                        state.wakingTv -> stringResource(R.string.state_waking_tv)
+                        state.wakingTv -> wakeLabel(state.wakeProgress)
                         else -> connectionLabel(state.connection)
                     },
                     style = MaterialTheme.typography.bodySmall,
@@ -232,6 +236,23 @@ fun connectionLabel(state: ConnectionState): String = when (state) {
     ConnectionState.Connecting -> stringResource(R.string.state_connecting)
     ConnectionState.Ready -> stringResource(R.string.state_connected)
     is ConnectionState.Failed -> stringResource(R.string.state_failed)
+}
+
+/** What the wake-up waits for, with a running count of seconds: a TV that takes a minute to start must not look stuck. */
+@Composable
+fun wakeLabel(progress: WakeProgress?): String {
+    val startedAt = progress?.startedAtMs
+    val seconds by produceState(0, startedAt) {
+        while (startedAt != null) {
+            value = ((System.currentTimeMillis() - startedAt) / 1000).toInt().coerceAtLeast(0)
+            delay(1_000)
+        }
+    }
+    return when (progress?.stage) {
+        null -> stringResource(R.string.state_waking_tv)
+        WakeStage.LG_TV -> stringResource(R.string.state_waking_lg_tv, seconds)
+        WakeStage.APPLE_TV -> stringResource(R.string.state_waking_apple_tv, seconds)
+    }
 }
 
 /** One line on why the last connection failed, in words a viewer of the log screen would not need. */

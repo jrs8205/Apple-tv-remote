@@ -66,8 +66,15 @@ data class RemoteState(
     val wakingTv: Boolean = false,
     /** The LG TV is asking on its screen whether to allow this app; nothing proceeds until someone answers there. */
     val lgTvPrompt: Boolean = false,
+    /** What the running wake-up waits for and since when; null until it starts and once it has ended. */
+    val wakeProgress: WakeProgress? = null,
     val lastError: Throwable? = null,
 )
+
+/** The TV that keeps a wake-up waiting: the LG TV until it has selected the Apple TV's input, then the Apple TV. */
+enum class WakeStage { LG_TV, APPLE_TV }
+
+data class WakeProgress(val stage: WakeStage, val startedAtMs: Long)
 
 /** One pairing conversation with a TV, from PIN prompt to credentials; opaque outside [RemoteController]. */
 class PairingAttempt internal constructor(
@@ -269,12 +276,21 @@ class RemoteController(
             val started = System.currentTimeMillis()
             try {
                 val settings = lg.first()
+                val throughLgTv = settings.enabled && settings.host.isNotBlank()
                 log.log {
-                    val lgPart = if (settings.enabled && settings.host.isNotBlank()) "LG ${settings.host}, input ${settings.inputId}, MAC ${settings.macAddress ?: "unknown"}" else "no LG TV"
+                    val lgPart = if (throughLgTv) "LG ${settings.host}, input ${settings.inputId}, MAC ${settings.macAddress ?: "unknown"}" else "no LG TV"
                     "wake-up started: $lgPart, Apple TV ${_state.value.device?.let { "${it.host}:${it.port}" } ?: "not paired"}"
                 }
+                // Set before the LG phase starts, so a phase that ends at once cannot be overwritten by this first stage.
+                _state.update { it.copy(wakeProgress = WakeProgress(if (throughLgTv) WakeStage.LG_TV else WakeStage.APPLE_TV, started)) }
                 coroutineScope {
-                    val lgPhase = if (settings.enabled && settings.host.isNotBlank()) async { wakeThroughLgTv(settings) } else null
+                    val lgPhase = if (throughLgTv) {
+                        async {
+                            wakeThroughLgTv(settings).also { _state.update { it.copy(wakeProgress = WakeProgress(WakeStage.APPLE_TV, started)) } }
+                        }
+                    } else {
+                        null
+                    }
                     var attempt = 0
                     // The address and port may change while the TV boots, so every attempt asks for the client afresh.
                     while (true) {
@@ -303,7 +319,7 @@ class RemoteController(
                 if (e !is CancellationException) log.log { "wake-up failed after ${(System.currentTimeMillis() - started) / 1000} s: $e" }
                 throw e
             } finally {
-                _state.update { it.copy(wakingTv = false) }
+                _state.update { it.copy(wakingTv = false, wakeProgress = null) }
             }
         }
         wakeCommand = wake

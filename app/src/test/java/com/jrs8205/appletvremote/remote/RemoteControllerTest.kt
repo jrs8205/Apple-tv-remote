@@ -34,6 +34,7 @@ import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.IOException
@@ -248,5 +249,40 @@ class RemoteControllerTest {
         controller.state.first { !it.wakingTv }
         delay(1_500)
         assertEquals(1, lines.count { it.contains("wake-up started") })
+    }
+
+    @Test
+    fun theWakeUpSaysItIsWaitingForTheLgTvUntilTheTvAnswers() = test {
+        pairWith(port = closedPort())
+        configureLgTv()
+
+        controller.wakeAndConnect()
+
+        assertEquals(WakeStage.LG_TV, controller.state.first { it.wakeProgress != null }.wakeProgress?.stage)
+        assertNull(controller.state.first { !it.wakingTv }.wakeProgress)
+    }
+
+    @Test
+    fun theWakeUpWaitsForTheAppleTvOnceTheLgTvHasSwitchedInput() = test {
+        FakeLgTv().use { lg ->
+            lgPort = lg.port
+            lg.serve()
+            pairWith(port = closedPort())
+            configureLgTv()
+
+            controller.wakeAndConnect()
+
+            controller.state.first { it.wakeProgress?.stage == WakeStage.APPLE_TV }
+            assertTrue("the stage changed before the LG TV switched input", lines.any { it.contains("LG TV switched") })
+        }
+    }
+
+    @Test
+    fun withoutAnLgTvTheWakeUpWaitsForTheAppleTvFromTheStart() = test {
+        pairWith(port = closedPort())
+
+        controller.wakeAndConnect()
+
+        assertEquals(WakeStage.APPLE_TV, controller.state.first { it.wakeProgress != null }.wakeProgress?.stage)
     }
 }
