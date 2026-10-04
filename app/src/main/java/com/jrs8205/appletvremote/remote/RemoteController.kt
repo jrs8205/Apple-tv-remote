@@ -119,7 +119,8 @@ class RemoteController(
         val wakeRetryDelayMs: Long = 4_000,
         val wakeConnectAttempts: Int = 6,
         val addressRefreshMs: Long = 6_000,
-        val lgWakeTimeoutMs: Long = 90_000,
+        /** An LG TV on Wi-Fi that has been off for hours can take over a minute to answer the magic packet. */
+        val lgWakeTimeoutMs: Long = 150_000,
         val lgRetryDelayMs: Long = 1_000,
     )
     private val _state = MutableStateFlow(RemoteState())
