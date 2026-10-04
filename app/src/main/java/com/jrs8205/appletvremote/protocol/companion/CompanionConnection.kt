@@ -13,6 +13,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -28,6 +29,7 @@ import java.io.EOFException
 import java.io.IOException
 import java.io.OutputStream
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -153,12 +155,21 @@ class CompanionConnection(
         withContext(ioDispatcher) {
             writeMutex.withLock {
                 val bytes = cipher?.seal(type, plain) ?: (FrameCodec.encodeHeader(type, plain.size) + plain)
+                // A write blocks once the TV stops reading and the socket buffers are full; it cannot be cancelled, and it
+                // would hold every later command behind it, so a write that does not finish in time closes the socket.
+                val watchdog = scope.launch {
+                    delay(requestTimeoutMs)
+                    log.log { "a write did not finish within $requestTimeoutMs ms, closing" }
+                    shutdown(SocketTimeoutException("write did not finish within $requestTimeoutMs ms"))
+                }
                 try {
                     out.write(bytes)
                     out.flush()
                 } catch (e: IOException) {
                     shutdown(e)
                     throw CompanionException.ConnectionClosed(e)
+                } finally {
+                    watchdog.cancel()
                 }
             }
         }

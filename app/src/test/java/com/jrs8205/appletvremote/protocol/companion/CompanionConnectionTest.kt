@@ -23,6 +23,10 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
+import java.util.concurrent.CompletableFuture
 
 class CompanionConnectionTest {
 
@@ -169,5 +173,22 @@ class CompanionConnectionTest {
         closer.join()
         connection.close()
         assertFalse(connection.isOpen)
+    }
+    /** A JUnit timeout, not [test]: a write blocked in the socket cannot be cancelled, so without the fix this would hang. */
+    @Test(timeout = 20_000)
+    fun aWriteThatThePeerNeverReadsClosesTheConnection() {
+        ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { server ->
+            val peer = CompletableFuture<Socket>()
+            Thread { runCatching { peer.complete(server.accept()) } }.apply { isDaemon = true }.start()
+            val connection = CompanionConnection(PlainSocketConnector, "127.0.0.1", server.localPort, requestTimeoutMs = 500)
+            runBlocking { connection.open() }
+
+            // The peer never reads, so the socket buffers fill up and a write blocks.
+            val failure = runCatching { runBlocking { repeat(4096) { connection.event("fill", mapOf("pad" to ByteArray(64 * 1024))) } } }.exceptionOrNull()
+
+            assertTrue("expected the blocked write to end the connection, got $failure", failure is CompanionException.ConnectionClosed)
+            assertFalse(connection.isOpen)
+            peer.getNow(null)?.close()
+        }
     }
 }
