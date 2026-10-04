@@ -37,4 +37,21 @@ class PlaybackGraceTest {
 
         assertEquals(listOf(true to 0L, false to 11_000L), seen)
     }
+
+    @Test
+    fun repeatedReportsOfNothingPlayingDoNotRestartTheGrace() = runTest {
+        // Other state changes (keyboard, connection) map to the same false again every few seconds.
+        val playing = flow {
+            emit(true)
+            delay(1_000)
+            repeat(7) {
+                emit(false)
+                delay(5_000)
+            }
+        }
+
+        val seen = playing.withDropGrace(10_000).map { it to testScheduler.currentTime }.toList()
+
+        assertEquals(listOf(true to 0L, false to 11_000L), seen)
+    }
 }

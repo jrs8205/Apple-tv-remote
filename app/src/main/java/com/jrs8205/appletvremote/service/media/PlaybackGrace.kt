@@ -8,10 +8,11 @@ import kotlinx.coroutines.flow.transformLatest
 
 /**
  * Passes `true` on at once and `false` only once it has lasted [graceMs]. The Apple TV reports that
- * nothing is playing for a moment whenever one of its own menus opens over the video.
+ * nothing is playing for a moment whenever one of its own menus opens over the video. Repeats are
+ * dropped first: every unrelated state change maps to the same value again and would restart the wait.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
-internal fun Flow<Boolean>.withDropGrace(graceMs: Long): Flow<Boolean> = transformLatest { active ->
+internal fun Flow<Boolean>.withDropGrace(graceMs: Long): Flow<Boolean> = distinctUntilChanged().transformLatest { active ->
     if (!active) delay(graceMs)
     emit(active)
 }.distinctUntilChanged()
