@@ -100,8 +100,8 @@ class WakeService : Service() {
         const val NOTIFICATION_ID = 2
         const val WAKE_LOCK_TAG = "appletvremote:wake"
         /**
-         * Well over the LG phase and the Apple TV's attempts together (about three minutes). A wake-up still marked as
-         * running after this is stuck, and the service and its wake lock end regardless.
+         * Over the LG phase and the Apple TV's attempts together (about four minutes at most). A wake-up still
+         * marked as running after this is stuck, and the service and its wake lock end regardless.
          */
         const val MAX_RUN_MS = 6 * 60_000L
     }
