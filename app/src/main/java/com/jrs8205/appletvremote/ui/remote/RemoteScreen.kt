@@ -72,6 +72,8 @@ fun RemoteScreen(viewModel: RemoteViewModel, onOpenSettings: () -> Unit) {
         object : ClickPadActions {
             override fun click(button: HidButton) = viewModel.press(button)
             override fun hold(button: HidButton) = viewModel.hold(button, BUTTON_HOLD_MS)
+            override fun buttonDown(button: HidButton) = viewModel.buttonDown(button)
+            override fun buttonUp(button: HidButton) = viewModel.buttonUp(button)
             override fun touch(phase: TouchPhase, x: Int, y: Int) = viewModel.touch(phase, x, y)
         }
     }
@@ -152,6 +154,8 @@ fun RemoteScreen(viewModel: RemoteViewModel, onOpenSettings: () -> Unit) {
                                 forward = false,
                                 haptics = haptics,
                                 onTap = viewModel::skipBackward,
+                                onHoldStart = { viewModel.buttonDown(HidButton.LEFT) },
+                                onHoldEnd = { viewModel.buttonUp(HidButton.LEFT) },
                             )
                             SkipButton(
                                 enabled = state.media.canSkipForward,
@@ -159,6 +163,8 @@ fun RemoteScreen(viewModel: RemoteViewModel, onOpenSettings: () -> Unit) {
                                 forward = true,
                                 haptics = haptics,
                                 onTap = viewModel::skipForward,
+                                onHoldStart = { viewModel.buttonDown(HidButton.RIGHT) },
+                                onHoldEnd = { viewModel.buttonUp(HidButton.RIGHT) },
                             )
                         }
                         Spacer(Modifier.height(16.dp))
@@ -215,12 +221,28 @@ fun RemoteScreen(viewModel: RemoteViewModel, onOpenSettings: () -> Unit) {
     }
 }
 
+/** Taps skip by [seconds]; holding keeps the remote's left or right button down, which rewinds or fast-forwards. */
 @Composable
-private fun SkipButton(enabled: Boolean, seconds: Int, forward: Boolean, haptics: Boolean, onTap: () -> Unit) {
+private fun SkipButton(
+    enabled: Boolean,
+    seconds: Int,
+    forward: Boolean,
+    haptics: Boolean,
+    onTap: () -> Unit,
+    onHoldStart: () -> Unit,
+    onHoldEnd: () -> Unit,
+) {
     val description = stringResource(if (forward) R.string.cd_skip_forward else R.string.cd_skip_backward, seconds)
     Box(modifier = Modifier.width(68.dp), contentAlignment = Alignment.Center) {
         if (enabled) {
-            RemoteButton(contentDescription = description, onTap = onTap, size = 56.dp, haptics = haptics) {
+            RemoteButton(
+                contentDescription = description,
+                onTap = onTap,
+                size = 56.dp,
+                onLongPress = onHoldStart,
+                onLongPressEnd = onHoldEnd,
+                haptics = haptics,
+            ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     ButtonIcon(if (forward) Icons.Default.FastForward else Icons.Default.FastRewind, size = 22.dp)
                     Text("$seconds", color = RemoteColors.OnButton, style = MaterialTheme.typography.labelSmall)

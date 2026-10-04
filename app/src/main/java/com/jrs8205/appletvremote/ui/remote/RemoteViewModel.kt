@@ -20,6 +20,8 @@ class RemoteViewModel(private val container: AppContainer) : ViewModel() {
 
     fun press(button: HidButton) = container.remoteController.press(button)
     fun hold(button: HidButton, holdMs: Long) = container.remoteController.press(button, holdMs)
+    fun buttonDown(button: HidButton) = container.remoteController.buttonDown(button)
+    fun buttonUp(button: HidButton) = container.remoteController.buttonUp(button)
     fun togglePower() = container.remoteController.togglePower()
     fun media(command: MediaCommand) = container.remoteController.media(command)
     fun skipForward() = container.remoteController.skip(settings.value.skipForwardSeconds.toDouble())

@@ -47,6 +47,9 @@ interface ClickPadActions {
     fun click(button: HidButton)
     /** The button is pressed and kept down for a moment, as when holding the clickpad centre on the Siri Remote. */
     fun hold(button: HidButton)
+    /** The button goes down and stays down until [buttonUp], for as long as a finger rests on it. */
+    fun buttonDown(button: HidButton)
+    fun buttonUp(button: HidButton)
     fun touch(phase: TouchPhase, x: Int, y: Int)
 }
 
@@ -54,7 +57,9 @@ interface ClickPadActions {
  * The round pad of the Siri Remote. Touchpad mode streams relative movement like a trackpad,
  * swipe mode turns each 56 dp of movement into one arrow press, d-pad mode has five tap zones.
  * A tap without movement selects in every mode; holding still instead holds OK, which on the
- * tvOS home screen opens the app options (edit, move to a folder, delete).
+ * tvOS home screen opens the app options (edit, move to a folder, delete). In d-pad mode an arrow
+ * held still stays down until the finger lifts, as on the Siri Remote: menus keep scrolling and
+ * video rewinds or fast-forwards.
  */
 @Composable
 fun ClickPad(
@@ -160,18 +165,23 @@ fun ClickPad(
 
                     var pressed = true
                     var held = false
+                    var heldDown: HidButton? = null
                     try {
-                        // A finger that stays still past the long-press timeout holds OK instead of tapping it. The hold
-                        // fires here, not on release, so the TV shows its menu while the finger is still down, like the
-                        // Siri Remote. Touchpad and swipe movement after the hold keeps working for navigating that menu.
-                        if (tapButton == HidButton.SELECT) {
-                            val stillPressed = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
-                                while (pressed && travelled <= tapSlopPx) pressed = next()
-                            }
-                            if (stillPressed == null) {
-                                held = true
-                                if (haptics) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        // A finger that stays still past the long-press timeout holds the button instead of tapping it.
+                        // The hold starts here, not on release, so the TV reacts while the finger is still down, like the
+                        // Siri Remote: OK opens its menu (touchpad and swipe movement keep working to navigate it), and
+                        // a d-pad arrow stays down until the finger lifts.
+                        val stillPressed = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                            while (pressed && travelled <= tapSlopPx) pressed = next()
+                        }
+                        if (stillPressed == null) {
+                            held = true
+                            if (haptics) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            if (tapButton == HidButton.SELECT) {
                                 current.hold(HidButton.SELECT)
+                            } else {
+                                heldDown = tapButton
+                                current.buttonDown(tapButton)
                             }
                         }
                         while (pressed) pressed = next()
@@ -182,6 +192,8 @@ fun ClickPad(
                     } finally {
                         // The gesture was cancelled (screen left, mode changed): the TV must not be left with a finger down.
                         if (touching) current.touch(TouchPhase.RELEASE, (padX * 1000).roundToInt(), (padY * 1000).roundToInt())
+                        // A held arrow is let go however the gesture ends, or the TV would keep scrolling or seeking.
+                        heldDown?.let(current::buttonUp)
                     }
                     if (!held && travelled <= tapSlopPx) {
                         tick()

@@ -49,7 +49,10 @@ import kotlinx.coroutines.coroutineScope
 @Composable
 fun buttonColor(): Color = if (isSystemInDarkTheme()) RemoteColors.ButtonDark else RemoteColors.ButtonLight
 
-/** A round remote button with tap, optional long press and a haptic tick. */
+/**
+ * A round remote button with tap, optional long press and a haptic tick. [onLongPressEnd] follows a long
+ * press when the finger lifts, or when the gesture ends any other way.
+ */
 @Composable
 fun RemoteButton(
     contentDescription: String,
@@ -57,12 +60,14 @@ fun RemoteButton(
     modifier: Modifier = Modifier,
     size: Dp = 68.dp,
     onLongPress: (() -> Unit)? = null,
+    onLongPressEnd: (() -> Unit)? = null,
     haptics: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
     val tap by rememberUpdatedState(onTap)
     val longPress by rememberUpdatedState(onLongPress)
+    val longPressEnd by rememberUpdatedState(onLongPressEnd)
     var pressed by remember { mutableStateOf(false) }
     Box(
         modifier = modifier
@@ -74,14 +79,23 @@ fun RemoteButton(
                 role = Role.Button
                 // The gestures below never reach a screen reader; these actions do.
                 onClick { tap(); true }
-                longPress?.let { handler -> onLongClick { handler(); true } }
+                // A screen reader's long press has no release to wait for, so it ends at once.
+                longPress?.let { handler -> onLongClick { handler(); longPressEnd?.invoke(); true } }
             }
             .pointerInput(haptics) {
+                var longPressed = false
                 detectTapGestures(
                     onPress = {
                         pressed = true
-                        tryAwaitRelease()
-                        pressed = false
+                        try {
+                            tryAwaitRelease()
+                        } finally {
+                            pressed = false
+                            if (longPressed) {
+                                longPressed = false
+                                longPressEnd?.invoke()
+                            }
+                        }
                     },
                     onTap = {
                         if (haptics) haptic.performHapticFeedback(HapticFeedbackType.ContextClick)
@@ -90,6 +104,7 @@ fun RemoteButton(
                     onLongPress = longPress?.let { handler ->
                         {
                             if (haptics) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            longPressed = true
                             handler()
                         }
                     },

@@ -322,4 +322,20 @@ class RemoteControllerTest {
         assertFalse(done.wakingTv)
         tv.awaitMessage("_hidC")
     }
+    @Test
+    fun aButtonHeldDownStaysDownUntilItIsReleased() = test {
+        pairWith()
+        controller.connect()
+        awaitConnection(ConnectionState.Ready)
+
+        controller.buttonDown(HidButton.RIGHT)
+        tv.awaitMessage("_hidC")
+        delay(300)
+        assertEquals(listOf(1L), tv.messages.filter { it.name == "_hidC" }.map { it.content["_hBtS"] })
+        controller.buttonUp(HidButton.RIGHT)
+
+        val up = tv.awaitMessage("_hidC", skip = 1)
+        assertEquals(HidButton.RIGHT.code.toLong(), up.content["_hidC"])
+        assertEquals(2L, up.content["_hBtS"])
+    }
 }

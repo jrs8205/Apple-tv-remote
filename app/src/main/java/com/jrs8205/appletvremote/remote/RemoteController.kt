@@ -461,6 +461,17 @@ class RemoteController(
         pressButton(button, holdMs)
     }
 
+    /** Presses [button] and keeps it down until [buttonUp], as a finger held on the Siri Remote does. */
+    fun buttonDown(button: HidButton) = enqueue {
+        log.log { "hold $button down" }
+        hid(button, down = true)
+    }
+
+    fun buttonUp(button: HidButton) = enqueue {
+        log.log { "release $button" }
+        hid(button, down = false)
+    }
+
     fun media(command: MediaCommand) = enqueue {
         log.log { "media $command" }
         media(command)
