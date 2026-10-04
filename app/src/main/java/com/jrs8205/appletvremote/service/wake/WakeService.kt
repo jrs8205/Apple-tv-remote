@@ -21,6 +21,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Keeps the app running while a wake-up is in progress. Android cuts the network of an app a few
@@ -51,14 +52,17 @@ class WakeService : Service() {
         if (wakeLock == null) {
             wakeLock = getSystemService(PowerManager::class.java)?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKE_LOCK_TAG)?.apply {
                 setReferenceCounted(false)
-                acquire(MAX_WAKE_UP_MS)
+                acquire(MAX_RUN_MS)
             }
         }
         if (watch == null) {
             container.connectionLog.log { "wake service running in the foreground" }
             watch = scope.launch {
-                container.remoteController.state.first { !it.wakeUpPending }
-                container.connectionLog.log { "wake service stopping: wake-up over" }
+                val over = withTimeoutOrNull(MAX_RUN_MS) { container.remoteController.state.first { !it.wakeUpPending } }
+                container.connectionLog.log {
+                    if (over != null) "wake service stopping: wake-up over"
+                    else "wake service stopping after ${MAX_RUN_MS / 60_000} min although a wake-up is still marked as running"
+                }
                 stopSelf()
             }
         }
@@ -95,7 +99,10 @@ class WakeService : Service() {
         const val CHANNEL_ID = "wake"
         const val NOTIFICATION_ID = 2
         const val WAKE_LOCK_TAG = "appletvremote:wake"
-        /** Longer than the LG phase and the Apple TV's attempts together; the lock lapses on its own if something hangs. */
-        const val MAX_WAKE_UP_MS = 5 * 60_000L
+        /**
+         * Well over the LG phase and the Apple TV's attempts together (about three minutes). A wake-up still marked as
+         * running after this is stuck, and the service and its wake lock end regardless.
+         */
+        const val MAX_RUN_MS = 6 * 60_000L
     }
 }
