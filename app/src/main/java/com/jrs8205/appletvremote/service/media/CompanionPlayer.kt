@@ -28,15 +28,18 @@ class CompanionPlayer(
 ) : SimpleBasePlayer(looper) {
 
     private var remote: RemoteState = controller.state.value
+    /** Whether the notification shows the TV's playback; kept through the TV's brief reports of nothing playing. */
+    private var showing: Boolean = remote.hasPlayback
 
     fun update(state: RemoteState) {
         remote = state
         invalidateState()
     }
 
-    /** True while the TV reports an active playback session over a live connection. */
-    val hasPlayback: Boolean
-        get() = remote.connection == ConnectionState.Ready && remote.media.playState != PlayState.INACTIVE
+    fun show(active: Boolean) {
+        showing = active
+        invalidateState()
+    }
 
     override fun getState(): State {
         val media = remote.media
@@ -62,11 +65,11 @@ class CompanionPlayer(
             )
             .build()
         // An empty playlist is what makes Media3 take the notification down while nothing is playing.
-        val playlist = if (hasPlayback) listOf(MediaItemData.Builder("apple-tv").setMediaItem(item).setIsSeekable(false).build()) else emptyList()
+        val playlist = if (showing)listOf(MediaItemData.Builder("apple-tv").setMediaItem(item).setIsSeekable(false).build()) else emptyList()
         return State.Builder()
             .setAvailableCommands(commands)
             .setPlaylist(playlist)
-            .setPlaybackState(if (hasPlayback) Player.STATE_READY else Player.STATE_IDLE)
+            .setPlaybackState(if (showing)Player.STATE_READY else Player.STATE_IDLE)
             .setPlayWhenReady(media.playState == PlayState.PLAYING, Player.PLAY_WHEN_READY_CHANGE_REASON_REMOTE)
             .setDeviceInfo(DeviceInfo.Builder(DeviceInfo.PLAYBACK_TYPE_REMOTE).setMinVolume(0).setMaxVolume(VOLUME_STEPS).build())
             .setDeviceVolume(VOLUME_STEPS / 2)
@@ -74,7 +77,10 @@ class CompanionPlayer(
     }
 
     override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
-        controller.media(if (playWhenReady) MediaCommand.PLAY else MediaCommand.PAUSE)
+        // The separate play and pause commands are obeyed by only some tvOS apps, and the play state reported to us is a
+        // guess; the remote's own play/pause button behaves in every app as it does on the Siri Remote.
+        controller.log.log { "system media controls: ${if (playWhenReady) "play" else "pause"}" }
+        controller.press(HidButton.PLAY_PAUSE)
         return Futures.immediateVoidFuture()
     }
 
@@ -115,3 +121,7 @@ class CompanionPlayer(
         const val VOLUME_STEPS = 16
     }
 }
+
+/** True while the TV reports an active playback session over a live connection. */
+internal val RemoteState.hasPlayback: Boolean
+    get() = connection == ConnectionState.Ready && media.playState != PlayState.INACTIVE

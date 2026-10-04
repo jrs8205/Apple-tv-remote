@@ -26,6 +26,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -38,6 +39,7 @@ class RemoteMediaService : MediaSessionService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var session: MediaSession? = null
     private var player: CompanionPlayer? = null
+    private var stopping = false
 
     override fun onCreate() {
         super.onCreate()
@@ -61,18 +63,33 @@ class RemoteMediaService : MediaSessionService() {
                 .collect { (state, settings) ->
                     companionPlayer.update(state)
                     session?.setMediaButtonPreferences(skipButtons(state, settings.skipBackwardSeconds, settings.skipForwardSeconds))
-                    // Lives only while the TV plays or pauses over a live connection: Android stops an idle service
-                    // in the background anyway, so playback that starts while the app is hidden gets its notification
-                    // back once the app is visible again. The emptied playlist makes Media3 withdraw the notification.
-                    if (!settings.mediaNotificationEnabled || !companionPlayer.hasPlayback) stopSelf()
+                    if (!settings.mediaNotificationEnabled) stop("media notification turned off")
                 }
         }
+        scope.launch {
+            // Lives only while the TV plays or pauses over a live connection: Android stops an idle service in the
+            // background anyway, so playback that starts while the app is hidden gets its notification back once the
+            // app is visible again. A menu the TV opens over the video reads as nothing playing for a moment, which
+            // must not take the lock screen controls away. The emptied playlist makes Media3 withdraw the notification.
+            container.remoteController.state.map { it.hasPlayback }.withDropGrace(PLAYBACK_GRACE_MS).collect { active ->
+                companionPlayer.show(active)
+                if (!active) stop("nothing playing for ${PLAYBACK_GRACE_MS / 1000} s")
+            }
+        }
+    }
+
+    private fun stop(reason: String) {
+        if (stopping) return
+        stopping = true
+        appContainer.connectionLog.log { "media service stopping: $reason" }
+        stopSelf()
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         // The process may be killed as soon as this returns, so the notification goes now rather than in onDestroy.
+        appContainer.connectionLog.log { "media service stopping: app removed from the recent apps" }
         releaseSession()
         stopSelf()
     }
@@ -146,6 +163,8 @@ class RemoteMediaService : MediaSessionService() {
     }
 
     private companion object {
+        /** How long the TV may report nothing playing before the notification goes. */
+        const val PLAYBACK_GRACE_MS = 10_000L
         const val COMMAND_SKIP_BACK = "com.jrs8205.appletvremote.SKIP_BACK"
         const val COMMAND_SKIP_FORWARD = "com.jrs8205.appletvremote.SKIP_FORWARD"
     }
