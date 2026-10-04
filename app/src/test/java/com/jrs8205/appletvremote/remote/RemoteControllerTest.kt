@@ -41,6 +41,7 @@ import java.io.IOException
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.ServerSocket
+import java.net.Socket
 import java.util.concurrent.CopyOnWriteArrayList
 import javax.net.SocketFactory
 
@@ -284,5 +285,41 @@ class RemoteControllerTest {
         controller.wakeAndConnect()
 
         assertEquals(WakeStage.APPLE_TV, controller.state.first { it.wakeProgress != null }.wakeProgress?.stage)
+    }
+    @Test
+    fun aPowerTapWhileConnectingIsMarkedUntilTheWakeUpItStartsHasTakenOver() = test {
+        // Accepts the connection and never answers, so the connect attempt stays in Connecting until pair-verify times out.
+        ServerSocket(0).use { silent ->
+            val held = CopyOnWriteArrayList<Socket>()
+            Thread { runCatching { while (true) held += silent.accept() } }.apply { isDaemon = true }.start()
+            pairWith(port = silent.localPort)
+            controller.connect()
+            awaitConnection(ConnectionState.Connecting)
+
+            controller.togglePower()
+
+            assertTrue("the queued power tap was not marked", controller.state.value.powerTapQueued)
+            val handedOver = controller.state.first { !it.powerTapQueued }
+            assertTrue("the mark was dropped before the wake-up had claimed the TV", handedOver.wakingTv)
+            held.forEach { it.close() }
+        }
+    }
+
+    @Test
+    fun aPowerTapWhileConnectingIsUnmarkedOnceTheConnectedTvHasBeenToggled() = test {
+        tv.responder = { name, _ ->
+            if (name == "_systemInfo") Thread.sleep(800)
+            tv.defaultReply(name)
+        }
+        pairWith()
+        controller.connect()
+        awaitConnection(ConnectionState.Connecting)
+
+        controller.togglePower()
+
+        assertTrue("the queued power tap was not marked", controller.state.value.powerTapQueued)
+        val done = controller.state.first { !it.powerTapQueued }
+        assertFalse(done.wakingTv)
+        tv.awaitMessage("_hidC")
     }
 }

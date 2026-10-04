@@ -92,9 +92,9 @@ class RemoteApp : Application() {
             }
         }
         container.appScope.launch {
-            container.remoteController.state.map { it.wakingTv }.distinctUntilChanged().collect { waking ->
-                // Started the moment the power tap claims the wake-up, while the app is still on screen; it stops itself at the end.
-                if (waking) {
+            container.remoteController.state.map { it.wakeUpPending }.distinctUntilChanged().collect { pending ->
+                // Started at the power tap that may wake the TV, while the app is still on screen; it stops itself at the end.
+                if (pending) {
                     runCatching { startForegroundService(Intent(this@RemoteApp, WakeService::class.java)) }
                         .onFailure { container.connectionLog.log { "wake service start failed: $it" } }
                 }

@@ -27,7 +27,8 @@ import kotlinx.coroutines.launch
  * seconds after it leaves the screen (magic packets then fail with EPERM) and lets the CPU sleep once
  * the phone is locked, and a swipe from the recent apps ends the process. A wake-up that waits a minute
  * or more for the LG TV would die in any of these; as a foreground service holding a wake lock it runs
- * to the end. Started when the wake-up starts, it stops itself when the wake-up is over.
+ * to the end. Started at a power tap that may wake the TV, it stops itself once no wake-up is running
+ * or pending.
  */
 class WakeService : Service() {
 
@@ -56,7 +57,7 @@ class WakeService : Service() {
         if (watch == null) {
             container.connectionLog.log { "wake service running in the foreground" }
             watch = scope.launch {
-                container.remoteController.state.first { !it.wakingTv }
+                container.remoteController.state.first { !it.wakeUpPending }
                 container.connectionLog.log { "wake service stopping: wake-up over" }
                 stopSelf()
             }

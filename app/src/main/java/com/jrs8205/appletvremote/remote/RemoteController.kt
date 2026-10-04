@@ -66,10 +66,17 @@ data class RemoteState(
     val wakingTv: Boolean = false,
     /** The LG TV is asking on its screen whether to allow this app; nothing proceeds until someone answers there. */
     val lgTvPrompt: Boolean = false,
+    /** Power taps waiting behind a connect attempt for their decision, which may start a wake-up. */
+    val queuedPowerTaps: Int = 0,
     /** What the running wake-up waits for and since when; null until it starts and once it has ended. */
     val wakeProgress: WakeProgress? = null,
     val lastError: Throwable? = null,
-)
+) {
+    val powerTapQueued: Boolean get() = queuedPowerTaps > 0
+
+    /** A wake-up runs, or may start once a queued power tap is decided; the app keeps itself running meanwhile. */
+    val wakeUpPending: Boolean get() = wakingTv || powerTapQueued
+}
 
 /** The TV that keeps a wake-up waiting: the LG TV until it has selected the Apple TV's input, then the Apple TV. */
 enum class WakeStage { LG_TV, APPLE_TV }
@@ -489,7 +496,17 @@ class RemoteController(
                         }
                     }
                 }
-                val queued = withClient(decision)
+                val decide = withClient(decision)
+                // Counted from the tap on, so the app can keep itself running while the tap waits; a wake-up the
+                // decision starts has claimed the TV by the time the count drops.
+                val queued: suspend () -> Unit = {
+                    try {
+                        decide()
+                    } finally {
+                        _state.update { it.copy(queuedPowerTaps = it.queuedPowerTaps - 1) }
+                    }
+                }
+                _state.update { it.copy(queuedPowerTaps = it.queuedPowerTaps + 1) }
                 pendingPowerDecision = queued
                 commands.trySend(queued)
             }
