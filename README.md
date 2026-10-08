@@ -45,6 +45,10 @@ manager.
 Requires Android 14 (API 34) or newer. On Android 17 the app asks for local network access,
 which it needs to discover and reach the Apple TV.
 
+**Registered with Google.** The package name and signing key are registered in Google's Android
+Developer Console, so the app keeps installing as usual under Google's new [sideloading
+rules](https://developer.android.com/developer-verification).
+
 ## Building
 
 Open the project in Android Studio or run:
