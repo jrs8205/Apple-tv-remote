@@ -40,7 +40,8 @@ The TV's certificate is pinned on pairing; if the TV ever presents a different o
 
 Download the latest APK from the [Releases](https://github.com/jrs8205/Apple-TV-Remote/releases/latest)
 page and open it on the phone. Android asks once to allow installs from the browser or file
-manager.
+manager. Every release is also mirrored on
+[SourceForge](https://sourceforge.net/projects/apple-tv-remote/).
 
 Requires Android 14 (API 34) or newer. On Android 17 the app asks for local network access,
 which it needs to discover and reach the Apple TV.
