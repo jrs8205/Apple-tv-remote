@@ -68,6 +68,13 @@ A signed release needs a `keystore.properties` file at the project root with `st
 `storePassword`, `keyAlias` and `keyPassword`; without it `assembleRelease` produces an unsigned
 APK. Neither the properties file nor the keystore belongs in version control.
 
+## Support development
+
+If Apple TV Remote is useful to you, you can support its development:
+
+- [GitHub Sponsors](https://github.com/sponsors/jrs8205) — monthly or one-time
+- [Buy Me a Coffee](https://buymeacoffee.com/jrs8205) — no sign-up needed
+
 ## License
 
 GPL-3.0. See [LICENSE](LICENSE).
